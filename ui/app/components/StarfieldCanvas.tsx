@@ -13,6 +13,8 @@ type StarfieldCanvasProps = {
   to: number;
   /** Top of the field in ms; slower requests go to the overflow band above it. */
   ceiling: number;
+  /** Bottom of the field in ms; faster requests are not drawn. 0 shows everything. */
+  floor?: number;
   scale: StarScale;
   /** Width of the right-hand edge, in ms, where spans are still arriving; shaded when set. */
   settlingMs?: number;
@@ -22,11 +24,11 @@ type StarfieldCanvasProps = {
   /** Label of the average guide, in the page's language. */
   avgLabel?: string;
   /** The chart's text alternative, in the page's language. */
-  describe?: (count: number, failed: number, above: number, ceiling: string, guides: string) => string;
+  describe?: (count: number, failed: number, above: number, ceiling: string, guides: string, hidden: number, floor: string) => string;
 };
 
-const describeInEnglish = (count: number, failed: number, above: number, ceiling: string, guides: string) =>
-  `Response time of ${count} traced requests: ${failed} failed, ${above} above ${ceiling} in the overflow band${guides ? `; estimated ${guides}` : ""}. Drag to select a region.`;
+const describeInEnglish = (count: number, failed: number, above: number, ceiling: string, guides: string, hidden: number, floor: string) =>
+  `Response time of ${count} traced requests: ${failed} failed, ${above} above ${ceiling} in the overflow band${hidden > 0 ? `, ${hidden} under ${floor} not drawn` : ""}${guides ? `; estimated ${guides}` : ""}. Drag to select a region.`;
 
 /**
  * The overflow band sits above the field, with a small gap, inside the top margin. The right margin
@@ -77,6 +79,22 @@ const MIN_STAR_ALPHA = 0.05;
 
 const formatTick = (ms: number) => (ms >= 1000 ? `${Number((ms / 1000).toFixed(1))} s` : `${Math.round(ms)} ms`);
 const formatClock = (epoch: number) => new Date(epoch).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
+
+/**
+ * Linear ticks at round values: quarters of a range that starts at 1 s read 2.75 s, 4.5 s. The floor
+ * and the ceiling always get a tick; a round value too close to either is dropped so labels do not touch.
+ */
+const TICK_STEPS = [1, 2, 4, 5, 8];
+const linearTicks = (floor: number, ceiling: number) => {
+  const rough = (ceiling - floor) / 4;
+  const power = 10 ** Math.floor(Math.log10(rough));
+  const step = (TICK_STEPS.find((candidate) => candidate * power >= rough) ?? 10) * power;
+  const ticks = [floor];
+  for (let tick = (Math.floor(floor / step) + 1) * step; tick < ceiling - step * 0.35; tick += step) {
+    if (tick - floor >= step * 0.35) ticks.push(tick);
+  }
+  return [...ticks, ceiling];
+};
 
 /**
  * A star's core radius from the requests it stands for. A record sampled 1 of 512 is drawn larger
@@ -140,7 +158,7 @@ const spriteOf = (rgb: readonly [number, number, number]) => {
  * Two stacked layers: the stars redraw only when the data, scale, ceiling, size or selection
  * changes; the drag rectangle lives on the layer above, so dragging never repaints the stars.
  */
-export const StarfieldCanvas = ({ points, from, to, ceiling, scale, settlingMs = 0, selection, onSelect, height = 440, avgLabel = "avg", describe = describeInEnglish }: StarfieldCanvasProps) => {
+export const StarfieldCanvas = ({ points, from, to, ceiling, floor = 0, scale, settlingMs = 0, selection, onSelect, height = 440, avgLabel = "avg", describe = describeInEnglish }: StarfieldCanvasProps) => {
   const wrapRef = useRef<HTMLDivElement>(null);
   const baseRef = useRef<HTMLCanvasElement>(null);
   const overlayRef = useRef<HTMLCanvasElement>(null);
@@ -163,13 +181,14 @@ export const StarfieldCanvas = ({ points, from, to, ceiling, scale, settlingMs =
   const plotH = Math.max(1, height - plotTop - MARGIN.bottom);
   const plotBottom = plotTop + plotH;
   const span = Math.max(1, to - from);
-  const logSpan = Math.max(1e-6, Math.log10(ceiling) - Math.log10(LOG_MIN));
+  const logBase = Math.max(floor, LOG_MIN);
+  const logSpan = Math.max(1e-6, Math.log10(ceiling) - Math.log10(logBase));
 
   /** Share of the field's height a response time reaches, 0 at the floor and 1 at the ceiling. */
   const fraction = (ms: number) => {
     const value = scale === "log"
-      ? (Math.log10(Math.max(ms, LOG_MIN)) - Math.log10(LOG_MIN)) / logSpan
-      : ms / ceiling;
+      ? (Math.log10(Math.max(ms, logBase)) - Math.log10(logBase)) / logSpan
+      : (ms - floor) / (ceiling - floor);
     return Math.min(1, Math.max(0, value));
   };
   const xOf = (time: number) => MARGIN.left + ((time - from) / span) * plotW;
@@ -179,7 +198,7 @@ export const StarfieldCanvas = ({ points, from, to, ceiling, scale, settlingMs =
   const msAt = (y: number) => {
     if (y <= plotTop) return ceiling;
     const share = Math.min(1, Math.max(0, (plotBottom - y) / plotH));
-    return scale === "log" ? 10 ** (Math.log10(LOG_MIN) + share * logSpan) : share * ceiling;
+    return scale === "log" ? 10 ** (Math.log10(logBase) + share * logSpan) : floor + share * (ceiling - floor);
   };
   const clampX = (x: number) => Math.min(MARGIN.left + plotW, Math.max(MARGIN.left, x));
   const clampY = (y: number) => Math.min(plotBottom, Math.max(bandTop, y));
@@ -249,16 +268,16 @@ export const StarfieldCanvas = ({ points, from, to, ceiling, scale, settlingMs =
     context.strokeStyle = SKY_GRID;
     context.lineWidth = 1;
 
-    // Y: decades on the log axis, quarters on the linear one; the ceiling always tops the field.
+    // Y: decades on the log axis, round values on the linear one; the ceiling always tops the field.
     const ticks = scale === "log"
-      ? [...[1, 10, 100, 1000, 10000, 100000].filter((ms) => ms < ceiling * 0.6), ceiling]
-      : [0, 1, 2, 3, 4].map((step) => (ceiling / 4) * step);
+      ? [logBase, ...[10, 100, 1000, 10000, 100000].filter((ms) => ms > logBase * 1.5 && ms < ceiling * 0.6), ceiling]
+      : linearTicks(floor, ceiling);
     context.textAlign = "right";
     context.textBaseline = "middle";
     for (const ms of ticks) {
       const y = Math.round(yOf(ms)) + 0.5;
       context.beginPath(); context.moveTo(MARGIN.left, y); context.lineTo(MARGIN.left + plotW, y); context.stroke();
-      context.fillText(scale === "log" && ms === LOG_MIN ? `≤ ${formatTick(ms)}` : formatTick(ms), MARGIN.left - 8, y);
+      context.fillText(scale === "log" && floor === 0 && ms === LOG_MIN ? `≤ ${formatTick(ms)}` : formatTick(ms), MARGIN.left - 8, y);
     }
     context.fillText(`> ${formatTick(ceiling)}`, MARGIN.left - 8, bandTop + BAND / 2);
     // X: whole minutes, thinned so labels never collide.
@@ -313,7 +332,7 @@ export const StarfieldCanvas = ({ points, from, to, ceiling, scale, settlingMs =
     const cellOf = (x: number, y: number) => Math.max(0, Math.floor((x - MARGIN.left) / DENSITY_CELL_PX))
       + Math.max(0, Math.floor((y - plotTop) / DENSITY_CELL_PX)) * cellColumns;
     const stars = points.flatMap((point) => {
-      if (point.failed || point.ms > ceiling) return [];
+      if (point.failed || point.ms > ceiling || point.ms < floor) return [];
       const x = xOf(point.end);
       const y = yOf(point.ms);
       const radius = radiusOf(point.multiplicity);
@@ -333,7 +352,7 @@ export const StarfieldCanvas = ({ points, from, to, ceiling, scale, settlingMs =
     context.strokeStyle = FAILED_SPIKE;
     context.lineWidth = 1;
     for (const point of points) {
-      if (!point.failed || point.ms > ceiling) continue;
+      if (!point.failed || point.ms > ceiling || point.ms < floor) continue;
       const x = xOf(point.end);
       const y = yOf(point.ms);
       const radius = Math.max(1.6, radiusOf(point.multiplicity));
@@ -361,6 +380,7 @@ export const StarfieldCanvas = ({ points, from, to, ceiling, scale, settlingMs =
     let okOver = 0;
     let failedOver = 0;
     for (const point of points) {
+      if (point.ms < floor) continue;
       if (point.ms > ceiling) {
         if (point.failed) failedOver += point.multiplicity; else okOver += point.multiplicity;
         continue;
@@ -387,15 +407,17 @@ export const StarfieldCanvas = ({ points, from, to, ceiling, scale, settlingMs =
     drawBar(bandTop + 2, BAND - 4, okOver, failedOver);
 
     // Percentile and average guides across the field, labelled in the strip. Labels step apart
-    // when close; a guide past the ceiling is named in the band row.
+    // when close. They describe the whole window, so a guide outside the field is still named: past
+    // the ceiling in the band row, under the floor at the foot of the strip.
     context.font = "600 10px 'Segoe UI', sans-serif";
     context.textAlign = "right";
     context.textBaseline = "bottom";
     let labelFloor = Number.POSITIVE_INFINITY;
     for (const { label, ms, kind } of guides) {
       const over = ms > ceiling;
-      const lineY = over ? bandTop + BAND / 2 : Math.round(yOf(ms)) + 0.5;
-      if (!over) {
+      const under = ms < floor;
+      const lineY = over ? bandTop + BAND / 2 : under ? plotBottom : Math.round(yOf(ms)) + 0.5;
+      if (!over && !under) {
         context.strokeStyle = kind === "avg" ? AVG_LINE : PERCENTILE_LINE;
         context.setLineDash(kind === "avg" ? [] : [3, 4]);
         context.beginPath(); context.moveTo(MARGIN.left, lineY); context.lineTo(histX + HIST_W, lineY); context.stroke();
@@ -405,12 +427,12 @@ export const StarfieldCanvas = ({ points, from, to, ceiling, scale, settlingMs =
       labelFloor = labelY;
       if (labelY < bandTop + 8) continue;
       context.fillStyle = kind === "avg" ? AVG_TEXT : PERCENTILE_TEXT;
-      context.fillText(over ? `${label} > ${formatTick(ceiling)}` : `${label} ${formatTick(ms)}`, histX + HIST_W - 2, labelY);
+      context.fillText(over ? `${label} > ${formatTick(ceiling)}` : under ? `${label} < ${formatTick(floor)}` : `${label} ${formatTick(ms)}`, histX + HIST_W - 2, labelY);
     }
     drawOverlay();
     // Every value the drawing reads is listed; the helpers above are derived from them.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [points, guides, from, to, ceiling, scale, settlingMs, selection, width, height]);
+  }, [points, guides, from, to, ceiling, floor, scale, settlingMs, selection, width, height]);
 
   const position = (event: React.PointerEvent<HTMLCanvasElement>) => {
     const box = event.currentTarget.getBoundingClientRect();
@@ -446,8 +468,9 @@ export const StarfieldCanvas = ({ points, from, to, ceiling, scale, settlingMs =
     onSelect({
       from: timeAt(Math.min(drag.x0, drag.x1)),
       to: timeAt(Math.max(drag.x0, drag.x1)),
-      // A box down to the floor takes everything below it, including sub-millisecond requests on the log axis.
-      min: bottom >= plotBottom - 1 ? 0 : msAt(bottom),
+      // A box down to the floor takes everything drawn there, including sub-millisecond requests
+      // on the log axis - and nothing under a chosen floor, which is not on screen.
+      min: bottom >= plotBottom - 1 ? floor : msAt(bottom),
       // A box reaching the top of the field or into the band takes in the overflow.
       max: top <= plotTop + 1 ? ceiling : msAt(top),
     });
@@ -455,6 +478,7 @@ export const StarfieldCanvas = ({ points, from, to, ceiling, scale, settlingMs =
 
   const failed = points.reduce((count, point) => count + (point.failed ? 1 : 0), 0);
   const above = points.reduce((count, point) => count + (point.ms > ceiling ? 1 : 0), 0);
+  const hidden = points.reduce((count, point) => count + (point.ms < floor ? 1 : 0), 0);
 
   return <div
     ref={wrapRef}
@@ -463,7 +487,7 @@ export const StarfieldCanvas = ({ points, from, to, ceiling, scale, settlingMs =
     tabIndex={0}
     onKeyDown={(event) => { if (event.key === "Escape") onSelect(null); }}
   >
-    <canvas ref={baseRef} style={{ width, height }} role="img" aria-label={describe(points.length, failed, above, formatTick(ceiling), guides.map(({ label, ms }) => `${label} ${formatTick(ms)}`).join(", "))} />
+    <canvas ref={baseRef} style={{ width, height }} role="img" aria-label={describe(points.length, failed, above, formatTick(ceiling), guides.map(({ label, ms }) => `${label} ${formatTick(ms)}`).join(", "), hidden, formatTick(floor))} />
     <canvas
       ref={overlayRef}
       style={{ width, height }}

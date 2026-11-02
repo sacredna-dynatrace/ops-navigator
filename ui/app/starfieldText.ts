@@ -18,7 +18,11 @@ const en = {
   overviewLoading: "Loading the overview…",
   overviewEmpty: "No service metrics for this timeframe.",
   ceilingAria: "Y-axis ceiling",
-  ceilingOption: (seconds: number) => `Y max ${seconds} s`,
+  ceilingOption: (limit: string) => `Y max ${limit}`,
+  floorAria: "Y-axis floor",
+  floorOption: (limit: string) => `Y min ${limit}`,
+  duration: (ms: number) => (ms === 0 ? "0" : ms < 1000 ? `${ms} ms` : `${ms / 1000} s`),
+  hiddenBelow: (limit: string, count: string, failed: string | null) => `${count} requests under ${limit} not drawn${failed ? ` (${failed} failed among them)` : ""}`,
   scaleAria: "Y-axis scale",
   logScale: "Log scale",
   linearScale: "Linear scale",
@@ -30,7 +34,7 @@ const en = {
   truncated: (cap: string) => `The window holds more than ${cap} traced requests, so only the newest are drawn. Shorten the window to see all of it.`,
   heading: "Response time",
   badge: (count: string) => `${count} points`,
-  summary: (range: string, failed: string, above: string, seconds: number) => `${range} · ${failed} failed · ${above} above ${seconds} s, in the band over the field`,
+  summary: (range: string, failed: string, above: string, limit: string) => `${range} · ${failed} failed · ${above} above ${limit}, in the band over the field`,
   livePaused: "Live paused while a selection is open - clear it to resume",
   liveUpdated: (time: string, updating: boolean) => `Live · updated ${time}${updating ? " · updating…" : ""} · the shaded edge is still filling in`,
   sampledNote: (records: string, requests: string) => `Traces are sampled: these ${records} records stand for about ${requests} requests. Busy services are sampled hardest, so read the shape here and take request counts and percentiles from the service metrics.`,
@@ -65,8 +69,8 @@ const en = {
   samplingValue: (total: string, stored: string | null, read: string | null) => `1 of ${total} (${[stored ? `stored 1/${stored}` : "", read ? `read 1/${read}` : ""].filter(Boolean).join(" · ")})`,
   columnTrace: "Trace",
   open: "Open",
-  describe: (count: number, failed: number, above: number, ceiling: string, guides: string) =>
-    `Response time of ${count} traced requests: ${failed} failed, ${above} above ${ceiling} in the overflow band${guides ? `; estimated ${guides}` : ""}. Drag to select a region.`,
+  describe: (count: number, failed: number, above: number, ceiling: string, guides: string, hidden: number, floor: string) =>
+    `Response time of ${count} traced requests: ${failed} failed, ${above} above ${ceiling} in the overflow band${hidden > 0 ? `, ${hidden} under ${floor} not drawn` : ""}${guides ? `; estimated ${guides}` : ""}. Drag to select a region.`,
 };
 
 export type StarfieldText = typeof en;
@@ -84,7 +88,11 @@ const ko: StarfieldText = {
   overviewLoading: "개요를 불러오는 중…",
   overviewEmpty: "이 시간 범위에 서비스 메트릭이 없습니다.",
   ceilingAria: "Y축 최대값",
-  ceilingOption: (seconds) => `Y 최대 ${seconds}초`,
+  ceilingOption: (limit) => `Y 최대 ${limit}`,
+  floorAria: "Y축 최소값",
+  floorOption: (limit) => `Y 최소 ${limit}`,
+  duration: (ms) => (ms === 0 ? "0" : ms < 1000 ? `${ms} ms` : `${ms / 1000}초`),
+  hiddenBelow: (limit, count, failed) => `${limit} 미만 ${count}건 숨김${failed ? ` (실패 ${failed}건 포함)` : ""}`,
   scaleAria: "Y축 눈금",
   logScale: "로그 축",
   linearScale: "선형 축",
@@ -96,7 +104,7 @@ const ko: StarfieldText = {
   truncated: (cap) => `이 시간 창에는 추적된 요청이 ${cap}건을 넘어 최신 요청만 그렸습니다. 전체를 보려면 시간 창을 줄이세요.`,
   heading: "응답시간",
   badge: (count) => `${count}개`,
-  summary: (range, failed, above, seconds) => `${range} · 실패 ${failed}건 · ${seconds}초 초과 ${above}건 (차트 위쪽 띠에 표시)`,
+  summary: (range, failed, above, limit) => `${range} · 실패 ${failed}건 · ${limit} 초과 ${above}건 (차트 위쪽 띠에 표시)`,
   livePaused: "선택 영역이 열려 있어 Live가 일시정지되었습니다. 선택을 해제하면 다시 시작합니다.",
   liveUpdated: (time, updating) => `Live · ${time} 갱신${updating ? " · 갱신 중…" : ""} · 오른쪽 음영 구간은 아직 데이터가 들어오는 중입니다`,
   sampledNote: (records, requests) => `트레이스는 일부만 저장됩니다. 이 기록 ${records}건이 실제 요청 약 ${requests}건을 대표합니다. 요청이 많은 서비스일수록 적게 저장되므로, 여기서는 분포의 모양을 보고 정확한 요청 수와 백분위는 서비스 메트릭에서 확인하세요.`,
@@ -131,8 +139,8 @@ const ko: StarfieldText = {
   samplingValue: (total, stored, read) => `${total}건 중 1건 (${[stored ? `저장 1/${stored}` : "", read ? `읽기 1/${read}` : ""].filter(Boolean).join(" · ")})`,
   columnTrace: "트레이스",
   open: "열기",
-  describe: (count, failed, above, ceiling, guides) =>
-    `추적된 요청 ${count}건의 응답시간: 실패 ${failed}건, ${ceiling} 초과 ${above}건${guides ? `, 추정 ${guides}` : ""}. 드래그하여 영역을 선택하세요.`,
+  describe: (count, failed, above, ceiling, guides, hidden, floor) =>
+    `추적된 요청 ${count}건의 응답시간: 실패 ${failed}건, ${ceiling} 초과 ${above}건${hidden > 0 ? `, ${floor} 미만 ${hidden}건은 그리지 않음` : ""}${guides ? `, 추정 ${guides}` : ""}. 드래그하여 영역을 선택하세요.`,
 };
 
 /** Outside the Dynatrace shell (tests, a bare dev page) the preference call can throw: English then. */

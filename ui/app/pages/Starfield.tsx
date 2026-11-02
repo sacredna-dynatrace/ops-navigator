@@ -31,9 +31,20 @@ const DEFAULT_TIMEFRAME: Timeframe = {
 };
 /** Live needs a window that ends now; a fixed or past end has nothing new to add. */
 const endsNow = (timeframe: Timeframe) => timeframe.to.type === "expression" && /^now(\(\))?$/.test(timeframe.to.value.trim());
-/** The top of the field. Slower requests are gathered into the overflow band above it, so outliers stay visible. */
-const CEILINGS = [2000, 4000, 8000, 16000, 32000] as const;
+/**
+ * The top of the field. Slower requests are gathered into the overflow band above it, so outliers
+ * stay visible. The short ones are for tenants whose requests nearly all finish under half a second.
+ */
+const CEILINGS = [500, 1000, 2000, 4000, 8000, 16000, 32000] as const;
 const DEFAULT_CEILING = 8000;
+/**
+ * The bottom of the field, to spread out the slow requests. Drawing only: nothing is queried again,
+ * and averages and percentiles keep describing the whole window. Faster requests are not drawn, and
+ * the page says how many that hides. No band like the one over the ceiling: most requests sit down
+ * here, so it would read full all the time.
+ */
+const FLOORS = [0, 100, 500, 1000, 2000, 4000] as const;
+const DEFAULT_FLOOR = 0;
 /** Linear by default, the reading people know; log spreads out the requests under half a second. */
 const DEFAULT_SCALE: StarScale = "linear";
 /**
@@ -110,6 +121,7 @@ export const Starfield = () => {
   const liveLabel = (value: string) => (value === "off" ? text.liveOff : text.liveEvery[value]);
   const [timeframe, setTimeframe] = useState<Timeframe>(DEFAULT_TIMEFRAME);
   const [ceiling, setCeiling] = useState<number>(DEFAULT_CEILING);
+  const [floor, setFloor] = useState<number>(DEFAULT_FLOOR);
   const [scale, setScale] = useState<StarScale>(DEFAULT_SCALE);
   const [refreshedAt, setRefreshedAt] = useState(() => Date.now());
   const [selection, setSelection] = useState<StarSelection | null>(null);
@@ -163,15 +175,19 @@ export const Starfield = () => {
   const refresh = () => { setRefreshedAt(Date.now()); setSelection(null); setSlot(null); };
 
   const stats = useMemo(() => {
-    let requests = 0; let failed = 0; let overCeiling = 0;
+    let requests = 0; let failed = 0; let overCeiling = 0; let hidden = 0; let hiddenFailed = 0;
     for (const point of points) {
       requests += point.multiplicity;
       // Weighted like the request total: in a sampled read failures are read in full, the rest at 1 in N.
       if (point.failed) failed += point.multiplicity;
       if (point.ms > ceiling) overCeiling += 1;
+      if (point.ms < floor) {
+        hidden += point.multiplicity;
+        if (point.failed) hiddenFailed += point.multiplicity;
+      }
     }
-    return { requests: Math.round(requests), failed: Math.round(failed), overCeiling };
-  }, [ceiling, points]);
+    return { requests: Math.round(requests), failed: Math.round(failed), overCeiling, hidden: Math.round(hidden), hiddenFailed: Math.round(hiddenFailed) };
+  }, [ceiling, floor, points]);
 
   /** A request pinned to the ceiling belongs to a selection that reaches the ceiling. */
   const selected = useMemo(() => {
@@ -195,9 +211,19 @@ export const Starfield = () => {
         <TimeframeSelector value={timeframe} min={retentionStart === null ? undefined : new Date(retentionStart).toISOString()} onChange={(value) => { if (value) { setTimeframe(value); setSelection(null); setSlot(null); setRefreshedAt(Date.now()); } }}>
           <TimeframeSelector.Presets>{PRESETS.map((preset) => <TimeframeSelector.PresetItem key={preset.from} value={preset} />)}</TimeframeSelector.Presets>
         </TimeframeSelector>
-        <Select name="starfield-ceiling" aria-label={text.ceilingAria} value={String(ceiling)} onChange={(value) => { if (value) setCeiling(Number(value)); }}>
+        <Select name="starfield-floor" aria-label={text.floorAria} value={String(floor)} onChange={(value) => { if (value) { setFloor(Number(value)); setSelection(null); } }}>
           <Select.Trigger />
-          <Select.Content>{CEILINGS.map((ms) => <Select.Option key={ms} value={String(ms)}>{text.ceilingOption(ms / 1000)}</Select.Option>)}</Select.Content>
+          <Select.Content>{FLOORS.filter((ms) => ms < ceiling).map((ms) => <Select.Option key={ms} value={String(ms)}>{text.floorOption(text.duration(ms))}</Select.Option>)}</Select.Content>
+        </Select>
+        <Select name="starfield-ceiling" aria-label={text.ceilingAria} value={String(ceiling)} onChange={(value) => {
+          if (!value) return;
+          const next = Number(value);
+          setCeiling(next);
+          // The field needs some height: a ceiling at or under the floor drops the floor.
+          if (next <= floor) { setFloor(DEFAULT_FLOOR); setSelection(null); }
+        }}>
+          <Select.Trigger />
+          <Select.Content>{CEILINGS.map((ms) => <Select.Option key={ms} value={String(ms)}>{text.ceilingOption(text.duration(ms))}</Select.Option>)}</Select.Content>
         </Select>
         <Select name="starfield-scale" aria-label={text.scaleAria} value={scale} onChange={(value) => { if (value === "log" || value === "linear") setScale(value); }}>
           <Select.Trigger />
@@ -226,7 +252,8 @@ export const Starfield = () => {
       <div className="panel-heading">
         <div>
           <h2>{text.heading} <span className="panel-badge">{text.badge(points.length.toLocaleString())}</span></h2>
-          <p>{text.summary(`${formatWhen(from)} – ${formatWhen(to)}`, stats.failed.toLocaleString(), stats.overCeiling.toLocaleString(), ceiling / 1000)}</p>
+          <p>{text.summary(`${formatWhen(from)} – ${formatWhen(to)}`, stats.failed.toLocaleString(), stats.overCeiling.toLocaleString(), text.duration(ceiling))}</p>
+          {stats.hidden > 0 && <p className="starfield-hidden" role="status">{text.hiddenBelow(text.duration(floor), stats.hidden.toLocaleString(), stats.hiddenFailed > 0 ? stats.hiddenFailed.toLocaleString() : null)}</p>}
           {liveMs !== null && followsNow && <p className="starfield-live" role="status">{selection ? text.livePaused : text.liveUpdated(formatTime(to), isUpdating)}</p>}
         </div>
       </div>
@@ -246,11 +273,11 @@ export const Starfield = () => {
         <span className="starfield-legend"><i className="star-dot" /> {text.legendOk} <i className="star-spike" /> {text.legendFailed} <i className="star-dot star-dot-large" /> {text.legendSampled} <i className="star-avg" /> {text.legendAvg} <i className="star-percentile" /> {text.legendPercentiles}</span>
         <span>{text.dragHint}</span>
         <Tooltip text={text.slowestTooltip}>
-          <Button size="condensed" variant="emphasized" disabled={points.length === 0} onClick={() => setSelection({ from, to, min: Math.min(slowestFloor(points), ceiling), max: ceiling })}>{text.slowestButton}</Button>
+          <Button size="condensed" variant="emphasized" disabled={points.length === 0} onClick={() => setSelection({ from, to, min: Math.max(floor, Math.min(slowestFloor(points), ceiling)), max: ceiling })}>{text.slowestButton}</Button>
         </Tooltip>
       </div>
       <div className="starfield-chart">
-        <StarfieldCanvas points={points} from={from} to={to} ceiling={ceiling} scale={scale} settlingMs={liveMs !== null && followsNow ? SETTLING_MS : 0} selection={selection} onSelect={setSelection} avgLabel={text.avgLabel} describe={text.describe} />
+        <StarfieldCanvas points={points} from={from} to={to} ceiling={ceiling} floor={floor} scale={scale} settlingMs={liveMs !== null && followsNow ? SETTLING_MS : 0} selection={selection} onSelect={setSelection} avgLabel={text.avgLabel} describe={text.describe} />
         {points.length === 0 && <p className="starfield-loading">{isLoading ? text.loading
           : segments.length > 0 ? text.emptySegment
           : tags.length > 0 ? text.emptyTags

@@ -265,5 +265,6 @@
 .ov-p95 { border-top: 2px solid #fcd34d; }
 .ov-avg { border-top: 2px solid #67e8f9; }
 .starfield-ratio { margin-top: -6px; color: #0369a1; }
+.starfield-hidden { color: #0369a1; font-weight: 600; }
 .starfield-live { color: #0369a1; font-weight: 600; }
 .starfield-loading { position: absolute; inset: 0; display: grid; place-items: center; margin: 0; color: var(--dashboard-muted); font-size: 13px; }
