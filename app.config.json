@@ -3,7 +3,7 @@
   "environmentUrl": "https://diw85600.apps.dynatrace.com/",
   "app": {
     "name": "OverviewDashboard",
-    "version": "0.0.131",
+    "version": "0.0.141",
     "description": "Explore request traffic from RUM applications through services to infrastructure",
     "id": "my.overview.dashboard",
     "scopes": [
@@ -15,7 +15,12 @@
       { "name": "storage:events:read", "comment": "Read dt.davis.problems for the problem count tile" },
       { "name": "storage:user.events:read", "comment": "Read user.events to correlate RUM traces with backend services" },
       { "name": "davis:analyzers:execute", "comment": "Run the Davis forecast analyzer for the selected node's headline metric" },
-      { "name": "storage:filter-segments:read", "comment": "List and apply segments in the topology map's segment selector" }
+      { "name": "storage:filter-segments:read", "comment": "List and apply segments in the topology map's segment selector" },
+      { "name": "automation:workflows:read", "comment": "Show whether the Analyze Problem workflows exist and are switched on (optional: the page works without it)" },
+      { "name": "storage:events:write", "comment": "Send the business event that runs the on-demand Analyze Problem workflow (SRE agent로 분석)" }
+    ],
+    "actions": [
+      { "name": "build-analysis-prompt", "title": "Build problem analysis prompt", "description": "Builds the Blast radius page's Analyze problem prompt for a Davis problem, for an AI task in a workflow" }
     ]
   }
 }

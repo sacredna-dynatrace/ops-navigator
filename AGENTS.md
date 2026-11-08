@@ -161,6 +161,10 @@ ui/
       Home.tsx               # "/" route — topology map
       BlastRadius.tsx        # "/blast-radius" route — a Davis problem drawn as rings around its root cause
   assets/                    # Static images and SVGs bundled with the app
+  app/problemAnalysis.ts     # Analyze-problem prompt (no imports) - shared by the page and the action
+actions/
+  build-analysis-prompt.action.ts  # Workflow action: builds the Analyze-problem prompt for a Davis problem
+ui/app/analyzeWorkflow.ts          # Analyze Problem workflows (SRE agent): template, create intent, run event, result
 ```
 
 ## ESLint Enforcement

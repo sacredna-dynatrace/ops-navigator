@@ -1,0 +1,12 @@
+{
+  "prompt": "Analyze Davis problem P-2611156 \"Failure rate increase\", 2026-11-05T01:00Z to 2026-11-05T01:20Z.\n...",
+  "displayId": "P-2611156",
+  "eventId": "-1234567890123456789_1762304400000V2",
+  "title": "Failure rate increase",
+  "category": "ERROR",
+  "active": false,
+  "origin": "root",
+  "rootId": "SERVICE-52AC624D70C377BC",
+  "affectedCount": 3,
+  "promptLength": 2400
+}

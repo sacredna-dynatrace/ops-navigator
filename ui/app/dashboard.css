@@ -206,6 +206,20 @@
 .blast-root em { color: var(--dashboard-muted); font-size: 11px; font-style: normal; }
 .blast-actions { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
 .blast-analysis-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; width: 100%; color: var(--dashboard-muted); font-size: 12px; }
+/* SRE agent analysis: run time and trigger above the answer. */
+.blast-agent-meta { font-size: 11px; }
+/* Auto-analysis settings sheet. */
+.auto-analysis { display: flex; flex-direction: column; gap: 14px; max-width: 640px; font-size: 13px; }
+.auto-analysis-facts { display: grid; grid-template-columns: max-content 1fr; gap: 6px 16px; margin: 0; }
+.auto-analysis-facts dt { color: var(--dashboard-muted); }
+.auto-analysis-facts dd { margin: 0; overflow-wrap: anywhere; }
+.auto-analysis-actions { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.auto-analysis-actions a { display: inline-flex; align-items: center; gap: 4px; color: #0369a1; font-size: 12px; text-decoration: none; }
+.auto-analysis-actions a svg { width: 12px; height: 12px; }
+.auto-analysis-row { display: flex; flex-direction: column; gap: 6px; padding: 12px 0; border-top: 1px solid var(--dashboard-line); }
+.auto-analysis-link { display: inline-flex; align-items: center; gap: 4px; color: #0369a1; font-size: 12px; text-decoration: none; }
+.auto-analysis-link svg { width: 12px; height: 12px; }
+.auto-analysis-note { color: var(--dashboard-muted); font-size: 12px; }
 .blast-controls { display: flex; flex-direction: column; gap: 8px; padding: 0 20px 10px; }
 .blast-controls-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
 /* Map search: results drop below the input and float over the map. */

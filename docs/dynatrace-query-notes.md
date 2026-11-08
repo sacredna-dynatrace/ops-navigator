@@ -628,6 +628,90 @@ values. Use `countIf(isNotNull(...))`.
 panel as `countIf(isNotNull())` - `<field>` was taken as markup. Prompt text uses no `<word>` forms.
 After the rewrite: 1,473 characters for the RUM problem, 1,537-1,687 for service problems.
 
+### Analyze problem as a workflow
+
+The same prompt runs from a workflow, defined in `ui/app/analyzeWorkflow.ts` and created from the
+page through the Workflows app (Blast radius > 자동 분석 설정; see below). On diw85600 (id
+`cdab43ac-…`, trigger on since 2026-11-08; it replaces the SRE Agent workflow, whose trigger is off -
+both on would analyze every problem twice). Facts checked on diw85600, 2026-11-08:
+
+- **One prompt, two callers.** `ui/app/problemAnalysis.ts` holds the problem summarize, record
+  parsing, log scope and `explainPrompt`, with no imports. The page calls it through
+  `assistPrompt.ts` (adds the browser's language and zone); the app action
+  `build-analysis-prompt` (`actions/`) bundles it for the workflow. Old and new builders gave
+  identical text on P-2611156 for three language/zone pairs and the RUM branch.
+- **The action reads one problem over 7 days, and service hosts over 7 days.**
+  `fetch dt.entity.service, from: now() - 2h` returned none of the services the 7-day window found
+  (`called_by`, `runs_on`), with no error. The page reads hosts over its own timeframe, so a page
+  click and a workflow run can differ in the host list - nothing else.
+- **`dt-app action create` fails on this project** ("has no UI and no function implementation"): it
+  writes `app.config.json` and `package.json` first, then validates before creating the files. The
+  files were written by hand from `node_modules/dt-app/lib/src/action/template`. Its
+  `tsconfig.action.json` has `typeRoots` relative to the project root although it sits in
+  `actions/` - fixed to `../node_modules/...` - and `actions/tsconfig.json` (a references-only
+  solution file) is what lets `eslint`'s project service find the action files.
+- **Event vs manual run.** An event trigger puts the Davis event in the execution's
+  `params.event` (`display_id`, `event.id`, …); `dtctl exec workflow … --params problem_id=P-…`
+  puts `problem_id` in `params`. The first task reads either.
+- **`prompt-agentic-ai` input is strict and undocumented.** The editor saves `prompt`, `instruction`
+  (singular - `instructions` is rejected as "Unrecognized key"), `supplementary`, `outputFormat`,
+  `conversationId`, and the tools twice: `selectedServers: [{ name: dynatrace-mcp, type:
+  dtp-mcp-gateway, tools: [execute-dql, get-problem-by-id, …] }]` and `selectedTools:
+  { "execute-dql::3": true, … }` (name::index). The editor shows them as "Data Analysis Agent" and
+  so on; the saved names are the MCP tool ids. An **unknown `selectedTools` key is accepted silently**,
+  and with no tools the run still SUCCEEDS: the answer lists ten DQL queries "to run in a notebook"
+  and a timeline marked "expected" - plausible, and none of it data (P-2611156, first run). Output:
+  `text`, `conversationId`, `jsonOutput`.
+- **Engine: the built-in SRE (incident) agent, not Prompt agentic AI.** Both answered the same prompt
+  on P-2611156 with tools. Both found the cause (1,549 failed client spans to 34.118.238.110 - checked).
+  The agentic answer named SERVICE-52AC… ":9079" (it is "Requests to public networks"; :9079 is
+  SERVICE-4F91…) and cited P-2611158 as a recurrence - a **duplicate** (`dt.davis.is_duplicate`). The
+  agent's answer was right on both and matched its own earlier run.
+- **Recurrence needs days, not 48h.** "Failure rate increase" fired daily at 03:26-03:36 UTC from
+  2026-11-01 to 11-04 (P-261110, P-261156, P-2611108, P-2611156), and both engines called P-2611156 a
+  real outage from a 48h window. The prompt now asks for 7 days, duplicates excluded, with start
+  times, and says the same alert at the same time of day on several days points to a scheduled job
+  or test scenario.
+- **Custom apps cannot write workflows.** Deploying with `automation:workflows:write` failed: "Only apps
+  that are provided by Dynatrace can use the 'automation:workflows:write' scope." No custom app on
+  diw85600 holds `automation:workflows:run` either (two hold `read`). So the page:
+  - **creates** through the Workflows app's `create-workflow` intent (properties `title`, `tasks`,
+    `trigger`, `isPrivate`, … - no `description`, so the template version sits in a comment in the
+    first task's script); the user saves it, as themselves;
+  - **runs** by ingesting a business event (`businessEventsClient.ingest`, scope `storage:events:write`)
+    that the on-demand workflow's trigger (`type: event`, `eventType: bizevents`) picks up. The
+    cloudevent `data` fields arrive top-level in `params.event` (`problem_id`). An event sent seconds
+    after the workflow was saved did not fire it; one sent minutes later fired it within 10 s;
+  - **reads** the answer from Grail: `annotate-and-link` writes a `CUSTOM_ANNOTATION` event with
+    `annotation.id`, `annotation.problem_ids`, `event.name` (our progress marker) and the full text in
+    `event.description` (5,762 characters, intact). `storage:events:read` is enough.
+  A workflow has one trigger, so there are two - auto (Davis problems) and on demand - from one template.
+- **One engine analyzes; Assist follows up.** The app cannot read Assist's answer (an intent is
+  one-way), so it cannot post it as a comment. Once the SRE agent has an annotation, the page's
+  Assist button sends its verdict (IPv4 masked, at most 600 characters) and asks Assist not to redo
+  the analysis, with `execute: false` so the user adds the question. Template updates pass the
+  workflow's `id` to `create-workflow` - declared, undocumented - hoping to replace in place; the
+  sheet lists leftover copies with links in case it does not.
+- **An agent that hits a ceiling still SUCCEEDS, with the ceiling as its answer.** Two texts seen:
+  "maximum number of tool calls has been reached" (the SRE Agent workflow's check) and "The maximum
+  number of steps has been reached for this interaction ..." (P-2611383, a RUM problem, 2026-11-08). The
+  second passed the first check and was posted as the analysis; the execution showed green. Template
+  v3 catches both, and the page reads either as a failure. The SRE agent also gets a hard budget
+  (12 tool calls) through run-agent's `supplementary` input - kept out of the shared prompt, since
+  Assist answered the same prompt within its limits (all of its figures checked out).
+- **Assist vs SRE agent on the same prompt (P-2611156, 7-day prompt).** Both named the cause and got
+  the 33/33 metric right. Assist found the daily recurrence (8 problems, all real, all on
+  CustomerFrontendREST) but wrote "03:25 KST" for 03:25 UTC and labelled UTC log times KST. The SRE
+  agent kept KST right but filtered recurrence by the root cause only, found 2 problems a week apart
+  and called it weekly ("every Tuesday" - both were Wednesdays); it also put a 03:35 count at 03:36.
+  The prompt now checks recurrence on any affected entity and spells out the UTC-to-zone conversion.
+  Noise verdicts differed between runs of the same engine (Nessus noise in one, real outage in the next).
+- **`run-agent` returns only the agent's last message.** First on-demand run (P-2611156, 2026-11-08):
+  event to final annotation in about 3.5 minutes, but the annotation held 592 characters - "위 보고서가
+  최종 분석 결과입니다" and a summary; the report itself was in an earlier message and was lost. The
+  prompt now asks for the whole answer in one final message with nothing after it.
+- **`dtctl apply -f` without an `id:` creates a new workflow every time.** Keep the id in the YAML.
+
 ## Davis analyzers (the forecast finding)
 
 `@dynatrace-sdk/client-davis-analyzers` takes a DQL timeseries expression directly, so the forecast

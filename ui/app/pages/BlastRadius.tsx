@@ -14,7 +14,10 @@ import { StatusIcon } from "../components/StatusMark";
 import { buildEntityLink, buildProblemFrontendLink, buildProblemLink, buildProcessLink, buildWorkloadLink } from "../components/TileLinks";
 import { useBlastRadiusData, useProblemDescription, type BlastProblem, type BlastQueryKey } from "../hooks/useBlastRadiusData";
 import { paletteVars } from "../theme/colors";
-import { ANSWER_LANGUAGES, ASSIST_INTENT, DEFAULT_ANSWER_LANGUAGE, answerLanguage, explainPrompt, type AnswerLanguage, type LogScope } from "../assistPrompt";
+import { ANSWER_LANGUAGES, ASSIST_INTENT, DEFAULT_ANSWER_LANGUAGE, answerLanguage, explainPrompt, followUpPrompt, type AnswerLanguage } from "../assistPrompt";
+import { logScopeOf } from "../problemAnalysis";
+import { AutoAnalysisSheet } from "../components/AutoAnalysisSheet";
+import { useAnalyzeWorkflows, useProblemAgentAnalysis, type ProblemAnalysis } from "../hooks/useAnalyzeWorkflow";
 import type { ServiceInfo } from "../hooks/useBlastRadiusData";
 
 /** Today, as on the topology page; a week of problems is one preset away. */
@@ -149,25 +152,58 @@ const matchesSearch = (problem: BlastProblem, needle: string) => {
  * "Please answer in Korean" and Assist answered in English, while later clicks were Korean.
  */
 /**
- * Where Assist should look for this problem's logs: the Kubernetes and process-group scope Davis
- * recorded, plus the hosts of the services involved - the only scope a problem tied purely to
- * services has.
+ * Assist for this problem. Before the SRE agent has analyzed it: the full Analyze-problem prompt, run
+ * at once. After: a follow-up with the agent's verdict, left for the user to finish with a question -
+ * one engine analyzes, so the same problem is not analyzed twice.
  */
-const logScopeOf = (problem: BlastProblem, services: Map<string, ServiceInfo>): LogScope => {
-  const serviceIds = [problem.originId, ...problem.affected.map((entity) => entity.id)].filter((id): id is string => Boolean(id?.startsWith("SERVICE-")));
-  const placed = serviceIds.flatMap((id) => { const service = services.get(id); return service ? [service] : []; });
-  const ids = (prefix: string) => problem.affected.map((entity) => entity.id).filter((id) => id.startsWith(prefix));
-  return {
-    ...problem.scope,
-    hosts: [...ids("HOST-"), ...placed.flatMap((service) => service.hosts)],
-  };
+const AnalyzeButton = ({ problem, language, services, agentReport }: { problem: BlastProblem; language: AnswerLanguage; services: Map<string, ServiceInfo>; agentReport: string | null }) =>
+  <Button size="condensed" onClick={() => sendIntent(agentReport
+    ? { prompt: followUpPrompt(problem, agentReport, answerLanguage(language)), execute: false }
+    : { prompt: explainPrompt(problem, answerLanguage(language), logScopeOf(problem, (id) => services.get(id)?.hosts)), execute: true }, ASSIST_INTENT)}>
+    <Button.Prefix><AiIcon /></Button.Prefix>
+    {agentReport ? "Assist에서 이어 묻기" : "Analyze problem"}
+  </Button>;
+
+/**
+ * Asks the on-demand Analyze Problem workflow to analyze the selected problem: the same prompt as
+ * Analyze problem, answered by the built-in SRE agent and kept as a problem annotation. Disabled only
+ * when the workflow is known to be missing, and while a run is pending - every run costs AI units.
+ */
+const AgentButton = ({ missing, analysis, onRun }: { missing: boolean; analysis: ProblemAnalysis; onRun: () => void }) => {
+  const pending = analysis.kind === "requested" || analysis.kind === "running" || analysis.kind === "loading";
+  const label = pending && analysis.kind !== "loading" ? "SRE agent 분석 중…" : analysis.kind === "done" || analysis.kind === "failed" ? "SRE agent로 다시 분석" : "SRE agent로 분석";
+  return <Button size="condensed" disabled={missing || pending} onClick={onRun} title={missing ? "자동 분석 설정에서 on demand workflow를 먼저 만드세요" : undefined}>
+    <Button.Prefix><AiIcon /></Button.Prefix>
+    {label}
+  </Button>;
 };
 
-const AnalyzeButton = ({ problem, language, services }: { problem: BlastProblem; language: AnswerLanguage; services: Map<string, ServiceInfo> }) =>
-  <Button size="condensed" onClick={() => sendIntent({ prompt: explainPrompt(problem, answerLanguage(language), logScopeOf(problem, services)), execute: true }, ASSIST_INTENT)}>
-    <Button.Prefix><AiIcon /></Button.Prefix>
-    Analyze problem
-  </Button>;
+const elapsed = (since: number) => {
+  const seconds = Math.max(0, Math.round((Date.now() - since) / 1000));
+  return seconds < 60 ? `${seconds}초` : `${Math.floor(seconds / 60)}분 ${seconds % 60}초`;
+};
+
+/** The SRE agent's answer for the selected problem, read from its annotation, or where its run stands. */
+const AgentAnalysis = ({ analysis, missing }: { analysis: ProblemAnalysis; missing: boolean }) => {
+  switch (analysis.kind) {
+    case "loading": return <p>최근 분석을 찾는 중…</p>;
+    case "none": return missing
+      ? <p>on demand workflow가 없습니다. 상단의 <b>자동 분석 설정</b>에서 만들 수 있습니다.</p>
+      : <p>이 문제에 대한 SRE agent 분석이 아직 없습니다.</p>;
+    case "requested": return <p>분석을 요청했습니다. workflow가 시작되기를 기다리는 중… ({elapsed(analysis.since)})</p>;
+    case "running": return <p>SRE agent가 분석 중입니다 ({elapsed(analysis.since)} 경과, 보통 2~3분). 결과는 문제 주석으로도 남습니다.</p>;
+    case "timeout": return <p>응답이 없습니다. on demand workflow가 없거나 꺼져 있을 수 있습니다 (<b>자동 분석 설정</b>에서 확인). 막 만든 workflow라면 1분 뒤 다시 시도하세요.</p>;
+    case "error": return <p>분석을 요청하거나 읽지 못했습니다: {analysis.message}</p>;
+    case "failed": return <>
+      <p>분석을 완료하지 못했습니다 ({new Date(analysis.at).toLocaleString()}).</p>
+      <Markdown>{analysis.text}</Markdown>
+    </>;
+    case "done": return <>
+      <p className="blast-agent-meta">{new Date(analysis.at).toLocaleString()} 분석</p>
+      <Markdown>{analysis.text}</Markdown>
+    </>;
+  }
+};
 
 /** Davis repeats the problem title as a top-level heading; the panel already shows it. */
 const withoutTitle = (markdown: string) => markdown.replace(/^\s*#\s+[^\n]*\n+/, "");
@@ -229,6 +265,11 @@ export const BlastRadius = () => {
   const selected: BlastProblem | undefined = visible.find((problem) => problem.displayId === selectedId) ?? visible[0];
   const layout = useMemo(() => (selected ? buildBlastLayout(selected, services, frontendCalls) : null), [frontendCalls, selected, services]);
   const description = useProblemDescription(selected?.displayId ?? null, resolved);
+  const analyzeWorkflows = useAnalyzeWorkflows();
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  // Missing only when the workflows were read and there is no on-demand one; unknown counts as present.
+  const onDemandMissing = analyzeWorkflows.status.kind === "ready" && !analyzeWorkflows.status.workflows.onDemand;
+  const agent = useProblemAgentAnalysis(selected?.eventId || null, selected?.displayId ?? null);
 
   /** The entity's own app, for the types with a verified link; null for everything else. */
   const linkFor = (id: string): string | null => {
@@ -274,8 +315,10 @@ export const BlastRadius = () => {
           <TimeframeSelector.Presets>{TIMEFRAME_SELECTOR_PRESETS.map((preset) => <TimeframeSelector.PresetItem key={`${preset.from}-${preset.to}`} value={preset} />)}<TimeframeSelector.PresetItem value={yesterdayPreset}>Yesterday</TimeframeSelector.PresetItem></TimeframeSelector.Presets>
         </TimeframeSelector>
         <RefreshControl intervalMs={autoRefreshMs} onIntervalChange={setAutoRefreshMs} onRefresh={refresh} isRefreshing={isLoading} />
+        <Button variant="emphasized" onClick={() => setSettingsOpen(true)}>자동 분석 설정</Button>
       </div>
     </section>
+    <AutoAnalysisSheet show={settingsOpen} onClose={() => setSettingsOpen(false)} status={analyzeWorkflows.status} onReload={() => void analyzeWorkflows.reload()} />
     {errors.length > 0 && <div className="query-message query-error" role="alert"><div className="query-error-list"><strong>{errors.length} of the page’s queries failed.</strong>{errors.map((item) => <span key={item.label}><b>{item.label}:</b> {item.message}</span>)}</div></div>}
     {truncated.length > 0 && <div className="query-message" role="status">{truncated.map((key) => QUERY_LABELS[key]).join(", ")} hit the result limit, so the list or the rings may be incomplete. Narrow the timeframe.</div>}
     {isLoading && <div className="query-message" role="status">Loading problems and the service call graph…</div>}
@@ -324,7 +367,8 @@ export const BlastRadius = () => {
             <p>{selected.displayId} · {selected.active ? "Open" : "Closed"} · {formatWhen(selected.start)} · {formatDuration(selected.start, selected.end)}</p>
             <div className="panel-links blast-actions">
               {problemLink && <a href={problemLink} target="_blank" rel="noopener noreferrer">Open {selected.displayId} in Problems <ExternalLinkIcon /></a>}
-              <AnalyzeButton problem={selected} language={language} services={services} />
+              <AnalyzeButton problem={selected} language={language} services={services} agentReport={agent.state.kind === "done" ? agent.state.text : null} />
+              <AgentButton missing={onDemandMissing} analysis={agent.state} onRun={() => void agent.run()} />
               <Select name="answer-language" aria-label="Answer language for Assist" value={language} onChange={(value) => { if (value) chooseLanguage(value); }}>
                 <Select.Trigger />
                 <Select.Content>
@@ -366,7 +410,10 @@ export const BlastRadius = () => {
           <span>Confirmed affected</span>
           <div className="workload-pods">{selected.affected.map((entity) => <div className="workload-pod" key={entity.id}><StatusIcon problem />{entityName(entity.id, entity.name)}<b>{ENTITY_KO[entityType(entity.id)] ?? entityType(entity.id).toLowerCase()}</b></div>)}</div>
           <hr />
-          <div className="blast-analysis-heading"><span>Davis 분석</span><AnalyzeButton problem={selected} language={language} services={services} /></div>
+          <div className="blast-analysis-heading"><span>SRE agent 분석</span><AgentButton missing={onDemandMissing} analysis={agent.state} onRun={() => void agent.run()} /></div>
+          <div className="blast-description"><AgentAnalysis analysis={agent.state} missing={onDemandMissing} /></div>
+          <hr />
+          <div className="blast-analysis-heading"><span>Davis 분석</span><AnalyzeButton problem={selected} language={language} services={services} agentReport={agent.state.kind === "done" ? agent.state.text : null} /></div>
           <div className="blast-description">
             {description.isLoading ? <p>Davis 분석을 불러오는 중…</p>
               : description.error ? <p>분석을 불러오지 못했습니다: {description.error}</p>

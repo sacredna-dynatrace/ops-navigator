@@ -74,8 +74,25 @@ Davis 문제를 하나 고르면 근본 원인을 가운데 두고, 그것에 �
   스크린샷 왼쪽처럼 Assist가 에러 로그, 메트릭, 트레이스, 이벤트, 재발 여부 순으로 분석 계획을 세우고
   결론을 고른 언어로 답합니다. 답변 언어는 버튼 옆에서 고르며, 브라우저에 기억됩니다.
 - 질문에는 엔티티 ID만 넣고 이름은 넣지 않습니다. 로그 범위를 좁히는 데 필요한 Kubernetes 네임스페이스와
-  워크로드 이름만 포함합니다. 질문을 만드는 규칙은 [ui/app/assistPrompt.ts](ui/app/assistPrompt.ts)에
-  있습니다.
+  워크로드 이름만 포함합니다. 질문을 만드는 규칙은 [ui/app/problemAnalysis.ts](ui/app/problemAnalysis.ts)에
+  있으며, 아래 SRE agent 분석도 같은 질문을 씁니다.
+
+**SRE agent로 분석 / 자동 분석 설정**
+
+- **SRE agent로 분석**은 같은 질문을 Dynatrace 내장 SRE(incident) agent가 분석하게 합니다. 페이지가 요청
+  비즈니스 이벤트를 보내면 **Analyze Problem (on demand)** workflow가 실행되고, 2~3분 뒤 결과가 오른쪽
+  **SRE agent 분석**에 표시됩니다. 결과는 문제 주석으로 남아 Problems 앱에서도 보이며, 페이지는 이 주석을
+  Grail에서 읽습니다. 실행할 때마다 AI 사용량이 듭니다.
+- 상단 **자동 분석 설정**에서 workflow 두 개를 만듭니다. **on demand**는 위 버튼용(켜진 상태로 생성), **auto**는
+  열린 지 10분 지난 ERROR/SLOWDOWN 문제를 자동으로 분석합니다(꺼진 상태로 생성). **만들기**를 누르면
+  Workflows 앱이 정의가 채워진 상태로 열리고, 저장하면 만든 사람의 권한으로 실행됩니다. 켜기·끄기와
+  삭제는 Workflows 앱에서 합니다. 사용자 정의 앱은 workflow를 직접 쓰거나 실행할 권한을 가질 수 없어서
+  이렇게 나뉩니다.
+- 내장 SRE Agent workflow와 auto workflow를 함께 켜면 문제마다 분석이 두 번 돕니다.
+- 분석은 SRE agent 한 곳에서 합니다. 이 문제에 SRE agent 분석이 있으면 **Analyze problem** 버튼이 **Assist에서
+  이어 묻기**로 바뀝니다. Assist를 판정 문장과 함께 열고, 질문은 사용자가 입력합니다(같은 문제를 다시 분석하지 않음).
+- 새 템플릿 버전이 나오면 **업데이트**를 누르세요. 같은 workflow를 새 정의로 덮어쓰도록 Workflows 앱이 열립니다.
+  사본이 생기면 패널의 **이전 버전 / 사본** 목록에서 열어 지우세요. 앱은 workflow를 지울 권한이 없습니다.
 
 ## Starfield
 
