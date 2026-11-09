@@ -89,10 +89,14 @@ Davis 문제를 하나 고르면 근본 원인을 가운데 두고, 그것에 �
   삭제는 Workflows 앱에서 합니다. 사용자 정의 앱은 workflow를 직접 쓰거나 실행할 권한을 가질 수 없어서
   이렇게 나뉩니다.
 - 내장 SRE Agent workflow와 auto workflow를 함께 켜면 문제마다 분석이 두 번 돕니다.
-- **처음 만든 workflow는 권한 동의가 필요합니다.** Workflows 앱에서 workflow를 열고 **Authorization settings**에서
-  `ai:operator:execute`를 허용하세요. 이 권한이 없으면 SRE agent 단계가 "missing required scope:
-  ai:operator:execute"로 실패하고, 페이지에 같은 안내가 표시됩니다. "전체 권한"이 보여 주는 긴 권한 목록은
-  필요하지 않습니다.
+- **처음 만든 workflow는 권한 동의가 필요합니다.** Workflows 앱에서 두 workflow를 각각 열고 **Authorization
+  settings**에서 **맞춤 선택**으로 아래 권한을 허용하세요. IAM 정책 추가는 필요 없습니다(일반 사용자 권한에 포함).
+  `ai:operator:execute`, `mcp-gateway:servers:invoke`, `mcp-gateway:servers:read`, `document:documents:read`,
+  `storage:buckets:read`, `storage:logs:read`, `storage:metrics:read`, `storage:spans:read`, `storage:events:read`,
+  `storage:entities:read`, `storage:smartscape:read`, `storage:user.events:read`
+  - `ai:operator:execute`가 없으면 SRE agent 단계가 "missing required scope"로 실패합니다.
+  - 이것만 있고 나머지가 없으면 agent가 조회 도구 없이 "[PARTIAL]" 보고서를 씁니다. 페이지는 두 경우 모두 이 안내를 표시합니다.
+  - "추천" 권한 묶음은 credential vault, API 토큰 등 관련 없는 권한 100개 이상을 요구하니 쓰지 마세요.
 - 분석은 SRE agent 한 곳에서 합니다. 이 문제에 SRE agent 분석이 있으면 **Analyze problem** 버튼이 **Assist에서
   이어 묻기**로 바뀝니다. Assist를 판정 문장과 함께 열고, 질문은 사용자가 입력합니다(같은 문제를 다시 분석하지 않음).
 - 새 템플릿 버전이 나오면 **업데이트**를 누르세요. 같은 workflow를 새 정의로 덮어쓰도록 Workflows 앱이 열립니다.

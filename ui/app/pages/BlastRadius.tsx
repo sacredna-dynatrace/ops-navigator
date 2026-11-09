@@ -18,6 +18,7 @@ import { ANSWER_LANGUAGES, ASSIST_INTENT, DEFAULT_ANSWER_LANGUAGE, answerLanguag
 import { logScopeOf } from "../problemAnalysis";
 import { AutoAnalysisSheet } from "../components/AutoAnalysisSheet";
 import { useAnalyzeWorkflows, useProblemAgentAnalysis, type ProblemAnalysis } from "../hooks/useAnalyzeWorkflow";
+import { WORKFLOW_PERMISSIONS, isPartialReport } from "../analyzeWorkflow";
 import type { ServiceInfo } from "../hooks/useBlastRadiusData";
 
 /** Today, as on the topology page; a week of problems is one preset away. */
@@ -183,12 +184,14 @@ const elapsed = (since: number) => {
   return seconds < 60 ? `${seconds}초` : `${Math.floor(seconds / 60)}분 ${seconds % 60}초`;
 };
 
-/**
- * A run refused for lack of the agent permission. On a second tenant the workflow failed with "missing
- * required scope: ai:operator:execute"; allowing that one permission in the workflow's Authorization
- * settings fixed it - the 121 permissions the "full access" option listed were not needed.
- */
+/** A run refused for a missing permission ("missing required scope: ai:operator:execute" on bby34718). */
 const MISSING_AI_PERMISSION = /ai:operator:execute|missing required scope/i;
+
+/** What to grant, and where - shown for refused runs and for reports written without data tools. */
+const PermissionHint = ({ lead }: { lead: string }) => <div className="blast-agent-hint">
+  <p>{lead} Workflows 앱에서 Analyze Problem workflow(on demand와 auto 모두)를 열고 <b>Authorization settings</b>에서 <b>맞춤 선택</b>으로 아래 권한을 허용한 뒤 다시 분석하세요. "추천" 묶음은 관련 없는 권한까지 요구하므로 쓰지 마세요.</p>
+  <code>{WORKFLOW_PERMISSIONS.join(", ")}</code>
+</div>;
 
 /** The SRE agent's answer for the selected problem, read from its annotation, or where its run stands. */
 const AgentAnalysis = ({ analysis, missing }: { analysis: ProblemAnalysis; missing: boolean }) => {
@@ -203,13 +206,12 @@ const AgentAnalysis = ({ analysis, missing }: { analysis: ProblemAnalysis; missi
     case "error": return <p>분석을 요청하거나 읽지 못했습니다: {analysis.message}</p>;
     case "failed": return <>
       <p>분석을 완료하지 못했습니다 ({new Date(analysis.at).toLocaleString()}).</p>
-      {MISSING_AI_PERMISSION.test(analysis.text) && <p className="blast-agent-hint">
-        workflow에 AI agent 실행 권한이 없습니다. Workflows 앱에서 Analyze Problem workflow를 열고 <b>Authorization settings</b>에서 <b>ai:operator:execute</b>를 허용한 뒤 다시 분석하세요. 다른 권한은 필요하지 않습니다.
-      </p>}
+      {MISSING_AI_PERMISSION.test(analysis.text) && <PermissionHint lead="workflow에 AI agent 실행 권한이 없습니다." />}
       <Markdown>{analysis.text}</Markdown>
     </>;
     case "done": return <>
       <p className="blast-agent-meta">{new Date(analysis.at).toLocaleString()} 분석</p>
+      {isPartialReport(analysis.text) && <PermissionHint lead="이 보고서는 데이터를 조회하지 못한 부분 보고서입니다. agent에게 조회 도구 권한이 없었던 것으로 보입니다." />}
       <Markdown>{analysis.text}</Markdown>
     </>;
   }

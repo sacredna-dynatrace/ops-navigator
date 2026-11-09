@@ -3,7 +3,7 @@ import { Button } from "@dynatrace/strato-components/buttons";
 import { Sheet } from "@dynatrace/strato-components/overlays";
 import { Paragraph } from "@dynatrace/strato-components/typography";
 import { ExternalLinkIcon } from "@dynatrace/strato-icons";
-import { TEMPLATE_VERSION, WORKFLOW_TITLES, openCreateWorkflow, workflowLink, type WorkflowInfo, type WorkflowKind } from "../analyzeWorkflow";
+import { TEMPLATE_VERSION, WORKFLOW_PERMISSIONS, WORKFLOW_TITLES, openCreateWorkflow, workflowLink, type WorkflowInfo, type WorkflowKind } from "../analyzeWorkflow";
 import type { WorkflowStatus } from "../hooks/useAnalyzeWorkflow";
 
 type Props = { show: boolean; onClose: () => void; status: WorkflowStatus; onReload: () => void };
@@ -48,7 +48,8 @@ export const AutoAnalysisSheet = ({ show, onClose, status, onReload }: Props) =>
         <Paragraph className="auto-analysis-note">
           <b>만들기</b>를 누르면 Workflows 앱이 정의가 채워진 상태로 열립니다. 저장하면 만든 사람의 권한으로 실행됩니다.
           저장한 뒤 이 패널에서 <b>새로 고침</b>을 누르세요. 막 저장한 workflow는 몇 분 지나야 트리거가 동작합니다.
-          처음 만든 workflow는 Workflows 앱의 <b>Authorization settings</b>에서 <b>ai:operator:execute</b>를 허용해야 SRE agent가 실행됩니다(이 권한 하나면 충분합니다).
+          처음 만든 workflow는 Workflows 앱의 <b>Authorization settings</b>에서 <b>맞춤 선택</b>으로 다음 권한을 허용해야 SRE agent가 데이터를 조회합니다: <code>{WORKFLOW_PERMISSIONS.join(", ")}</code>.
+          "추천" 묶음은 관련 없는 권한까지 요구하므로 쓰지 마세요.
         </Paragraph>
         {status.kind === "loading" && <Paragraph>workflow를 확인하는 중…</Paragraph>}
         {status.kind === "unknown" && <div className="query-message" role="status">

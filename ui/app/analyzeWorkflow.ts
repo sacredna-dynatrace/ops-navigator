@@ -321,6 +321,26 @@ export const findWorkflows = async (): Promise<FoundWorkflows> => {
 };
 
 /**
+ * What a workflow must be granted in its Authorization settings (custom selection) for the SRE agent to
+ * work. Checked on bby34718: with only ai:operator:execute the agent ran with no data tools and wrote a
+ * [PARTIAL] report from the problem's metadata; with this list it queried spans, logs and metrics. The
+ * user already held all of them - the Workflows app's "recommended" set asked for 137 unrelated ones
+ * (credential vault, API tokens, ...) that are not needed.
+ */
+export const WORKFLOW_PERMISSIONS = [
+  "ai:operator:execute", "mcp-gateway:servers:invoke", "mcp-gateway:servers:read", "document:documents:read",
+  "storage:buckets:read", "storage:logs:read", "storage:metrics:read", "storage:spans:read",
+  "storage:events:read", "storage:entities:read", "storage:smartscape:read", "storage:user.events:read",
+];
+
+/**
+ * A report the agent wrote without data tools. It still SUCCEEDS; the agent marks it "[PARTIAL]" and says
+ * it has no query tools. Matched loosely, so the page warns rather than calls it a failure.
+ */
+export const isPartialReport = (text: string) =>
+  /\[PARTIAL\]|쿼리를 실행할 수 있는 도구|no (dql|query) tools?|cannot (run|execute) (dql|queries)/i.test(text);
+
+/**
  * Link to a workflow in the Workflows app. Absolute, like the page's other links: the app runs in an
  * iframe on its own origin, where a relative `/ui/apps/...` link opened nothing.
  */

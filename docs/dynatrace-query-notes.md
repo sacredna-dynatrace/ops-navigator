@@ -686,12 +686,16 @@ both on would analyze every problem twice). Facts checked on diw85600, 2026-11-0
     `annotation.id`, `annotation.problem_ids`, `event.name` (our progress marker) and the full text in
     `event.description` (5,762 characters, intact). `storage:events:read` is enough.
   A workflow has one trigger, so there are two - auto (Davis problems) and on demand - from one template.
-- **A new workflow needs `ai:operator:execute` consented in its Authorization settings.** On a second
-  tenant `call_agent` failed in 3 s: "Operator execute failed: Authorization token is missing required
-  scope: ai:operator:execute". The user already held the permission (it was absent from the 121
-  "missing permissions" the full-access option listed); allowing just that one in the workflow's
-  Authorization settings fixed it, with no IAM policy change. Workflows saved through the intent start
-  without that consent; on diw85600 it had been given earlier.
+- **A new workflow needs twelve permissions consented in its Authorization settings** (bby34718,
+  2026-11-09; `WORKFLOW_PERMISSIONS` in analyzeWorkflow.ts). In order:
+  - none: `call_agent` failed in 3 s - "Authorization token is missing required scope: ai:operator:execute";
+  - only `ai:operator:execute`: the run SUCCEEDED, but the agent had no data tools - "이 환경에는 DQL 쿼리를
+    실행할 수 있는 도구가 없습니다" - and wrote a [PARTIAL] report from the problem's metadata;
+  - adding `mcp-gateway:servers:invoke/read`, `document:documents:read` and the `storage:*:read` scopes:
+    a real analysis (its span and log counts checked out).
+  The user already held all twelve - no IAM change. The editor's "recommended" set listed 137 permissions
+  the user lacked (credential vault, API tokens, ...) and is not needed. Workflows saved through the
+  intent start without consent; on diw85600 it had been given earlier.
 - **One engine analyzes; Assist follows up.** The app cannot read Assist's answer (an intent is
   one-way), so it cannot post it as a comment. Once the SRE agent has an annotation, the page's
   Assist button sends its verdict (IPv4 masked, at most 600 characters) and asks Assist not to redo

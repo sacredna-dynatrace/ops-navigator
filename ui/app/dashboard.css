@@ -208,6 +208,8 @@
 .blast-analysis-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; width: 100%; color: var(--dashboard-muted); font-size: 12px; }
 /* SRE agent analysis: run time and trigger above the answer. */
 .blast-agent-hint { padding: 6px 8px; border-left: 3px solid #d97706; background: rgb(217 119 6 / 8%); color: var(--dashboard-ink) !important; }
+.blast-agent-hint p { margin: 0 0 4px; color: var(--dashboard-ink); }
+.blast-agent-hint code { display: block; font-size: 11px; overflow-wrap: anywhere; }
 .blast-agent-meta { font-size: 11px; }
 /* Auto-analysis settings sheet. */
 .auto-analysis { display: flex; flex-direction: column; gap: 14px; max-width: 640px; font-size: 13px; }
