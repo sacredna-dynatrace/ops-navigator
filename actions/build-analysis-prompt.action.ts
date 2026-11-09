@@ -1,3 +1,4 @@
+import { getEnvironmentUrl } from "@dynatrace-sdk/app-environment";
 import { userLogger } from "@dynatrace-sdk/automation-action-utils/actions";
 import { queryExecutionClient } from "@dynatrace-sdk/client-query";
 import { DISPLAY_ID, explainPrompt, logScopeOf, problemFactsQuery, problemFromRecord, scopeServiceIds, serviceHostsQuery, strings, text } from "../ui/app/problemAnalysis";
@@ -65,10 +66,15 @@ export default async (payload: ActionInput) => {
   const hostsByService = new Map(hostRecords.map((row) => [text(row, "id"), strings(row, "hosts")] as const));
   const scope = logScopeOf(problem, (id) => hostsByService.get(id));
 
-  const prompt = explainPrompt(problem, language, scope, zone);
+  // Absolute links for the answer; without the URL the prompt asks for plain ids instead.
+  let environmentUrl: string | null = null;
+  try { environmentUrl = getEnvironmentUrl(); } catch { userLogger.warn("Environment URL unavailable; the prompt asks for plain ids instead of links."); }
+  const prompt = explainPrompt(problem, language, scope, zone, environmentUrl);
   userLogger.info(`Built the analysis prompt for ${problem.displayId} (${problem.origin}, ${prompt.length} characters).`);
   return {
     prompt,
+    // For the workflow's clean_report task, which links entity ids in the answer.
+    environmentUrl,
     displayId: problem.displayId,
     eventId: problem.eventId,
     title: problem.title,

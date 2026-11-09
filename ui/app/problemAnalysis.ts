@@ -237,7 +237,65 @@ const logScope = (scope: LogScope): string | null => {
  * and "Netty on 0:0:0:0:0:0:0:0:*" got the whole prompt rejected by Assist's PII blocking.
  * Kubernetes namespace and workload names are the exception - logs carry no ids for them.
  */
-export const explainPrompt = (problem: AnalysisProblem, language: string | null, scope: LogScope, zone: string | null): string => {
+/**
+ * Links an answer may use, built here rather than described to the model. With "relative paths
+ * (/ui/entity/ENTITY-ID, .../problem/P-ID)" in the prompt, every evidence link in the reports failed on
+ * diw85600 and bby34718: the Problems app opens a problem by its event id, not the P- display id, and
+ * /ui/entity/ is a classic route that shows an empty page. Routes are the page's verified ones
+ * (TileLinks.ts), assembled from parts because the no-secrets lint reads a long mixed-case URL as a
+ * secret. Absolute, since a relative link opens on the app's own origin.
+ */
+const PROBLEMS_APP = ["ui", "apps", "dynatrace.davis.problems", "problem"].join("/");
+const ENTITY_ROUTES: { prefix: string; path: string; query: string }[] = [
+  { prefix: "SERVICE-", path: ["ui", "apps", "dynatrace.services", "explorer", "services"].join("/"), query: ["perspective=performance", "detailsId="].join("&") },
+  { prefix: "HOST-", path: ["ui", "apps", "dynatrace.infraops", "explorer", "Compute", "Hosts"].join("/"), query: ["perspective=Health", "fullPageId="].join("&") },
+];
+const base = (environmentUrl: string) => environmentUrl.replace(/\/$/, "");
+export const problemLink = (environmentUrl: string, eventId: string) => `${base(environmentUrl)}/${PROBLEMS_APP}/${encodeURIComponent(eventId)}`;
+/** A link for a service or host; null for types without a verified route (process groups, workloads, ...). */
+export const entityLink = (environmentUrl: string, entityId: string): string | null => {
+  const route = ENTITY_ROUTES.find((candidate) => entityId.startsWith(candidate.prefix));
+  return route ? `${base(environmentUrl)}/${route.path}?${route.query}${encodeURIComponent(entityId)}` : null;
+};
+
+/**
+ * Only problem links go into the prompt - paths, no query string. Entity links need query parameters
+ * (fullPageId=HOST-..., perspective=Health), and Assist rejected a whole prompt over them: "Potentially
+ * sensitive data detected: URL_PARAM_VALUE" (P-2611453, diw85600). Entities stay plain ids; the
+ * workflow's clean_report task and the page turn them into links afterwards (linkifyEntities).
+ */
+const linkLines = (problem: AnalysisProblem, environmentUrl: string | null): string[] => {
+  if (!environmentUrl) return ["Links: give entity and problem ids as plain text, without links."];
+  return [
+    "Evidence links: give every entity (service, host, process group, workload, ...) as its plain id, with no link. Link problems only, like this:",
+    problem.eventId ? `- ${problem.displayId}: ${problemLink(environmentUrl, problem.eventId)}` : "",
+    `- Any other problem (e.g. a recurrence): ${base(environmentUrl)}/${PROBLEMS_APP}/EVENT_ID, with EVENT_ID its event.id from dt.davis.problems (fetch it with display_id). Never link a P- display id: the Problems app does not open it.`,
+  ].filter(Boolean);
+};
+
+/** Classic service and host ids: 16 hex digits. */
+const LINKABLE_ID = /(?:\/ui\/entity\/)?\b((?:SERVICE|HOST)-[0-9A-F]{16})\b/g;
+/** Code blocks, code spans, markdown links and bare URLs: left as they are, except the cases below. */
+const PROTECTED = /(```[\s\S]*?```|`[^`\n]*`|\[[^\]\n]*\]\([^)\s]*\)|https?:\/\/[^\s)]+)/;
+
+/**
+ * Turns service and host ids in an answer into links to their pages: bare ids, ids alone in a code
+ * span, and old classic links (/ui/entity/ID, which render an empty page). Other ids and links are
+ * left alone. CLEAN_SCRIPT in analyzeWorkflow.ts runs the same rule in the workflow.
+ */
+export const linkifyEntities = (text: string, environmentUrl: string): string => {
+  const link = (id: string) => entityLink(environmentUrl, id) ?? "";
+  return text.split(PROTECTED).map((part, index) => {
+    if (index % 2 === 0) return part.replace(LINKABLE_ID, (_match, id: string) => `[${id}](${link(id)})`);
+    const classic = /\/ui\/entity\/((?:SERVICE|HOST)-[0-9A-F]{16})/.exec(part);
+    if (classic && part.startsWith("[")) return part.replace(/^\[[^\]]*\]/, (label) => label.replace("/ui/entity/", "")).replace(/\]\([^)\s]*\)$/, `](${link(classic[1])})`);
+    if (classic) return link(classic[1]);
+    const code = /^`((?:SERVICE|HOST)-[0-9A-F]{16})`$/.exec(part);
+    return code ? `[${part}](${link(code[1])})` : part;
+  }).join("");
+};
+
+export const explainPrompt = (problem: AnalysisProblem, language: string | null, scope: LogScope, zone: string | null, environmentUrl: string | null = null): string => {
   const start = Date.parse(problem.start);
   const end = Date.parse(problem.end);
   const hasWindow = Number.isFinite(start);
@@ -316,7 +374,8 @@ export const explainPrompt = (problem: AnalysisProblem, language: string | null,
     // CustomerFrontendREST every day, with a different root cause on most days.
     "If calls remain, also check: how often this alert name fired in the last 7 days on any of the affected entities above - not only the root cause, which can differ from day to day (fetch dt.davis.problems, same event.name, dt.davis.is_duplicate == false, expand affected_entity_ids, keep those ids; list the problem ids with their start times) - the same alert at about the same time of day on several days points to a scheduled job or test scenario; for a threshold alert, the triggering metric's own time series, not its description.",
     "Judge whether it needs attention: synthetic, test-origin, or steadily recurring alerts with no correlating logs are noise - say so.",
-    "Answer: start with a one-sentence Verdict (kind of problem, what is happening, which entity, since when); then checks run (filter, range, record count incl. 0); timeline from the earliest anomaly; root cause with evidence and DQL; impact; remediation; prevention; evidence links as relative paths (/ui/entity/ENTITY-ID, /ui/apps/dynatrace.davis.problems/problem/P-ID). Say so if the data does not support a conclusion.",
+    "Answer: start with a one-sentence Verdict (kind of problem, what is happening, which entity, since when); then checks run (filter, range, record count incl. 0); timeline from the earliest anomaly; root cause with evidence and DQL; impact; remediation; prevention; evidence links from the list below. Say so if the data does not support a conclusion.",
+    ...linkLines(problem, environmentUrl),
     // A workflow keeps only the agent's last message. On P-2611156 (diw85600) the SRE agent wrote its
     // report, then closed with "위 보고서가 최종 분석 결과입니다" and a summary - and the annotation got
     // the 592-character summary, not the report. The SRE Agent workflow's prompt guards the same way.

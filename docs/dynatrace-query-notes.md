@@ -696,6 +696,18 @@ both on would analyze every problem twice). Facts checked on diw85600, 2026-11-0
   The user already held all twelve - no IAM change. The editor's "recommended" set listed 137 permissions
   the user lacked (credential vault, API tokens, ...) and is not needed. Workflows saved through the
   intent start without consent; on diw85600 it had been given earlier.
+- **Evidence links are built by code, not described.** Asked for "relative paths (/ui/entity/ENTITY-ID,
+  .../problem/P-ID)", every link in the reports failed on diw85600 and bby34718: the Problems app opens a
+  problem by its event id (the browser showed `/problem/8648991466400332811_1794187860000V2`), and
+  `/ui/entity/` is a classic route that renders empty. The prompt now lists absolute links for the problem
+  and its services and hosts (the page's verified routes), a template for other problems that needs
+  `event.id`, and says to leave every other entity unlinked.
+- **No URL with a query string in a prompt.** With service and host links in it, Assist rejected the
+  whole prompt: "Potentially sensitive data detected: URL_PARAM_VALUE: [HOST-7F459D7DFBC39F1E, Health]"
+  (P-2611453). Problem links are paths and passed. So the prompt links problems only and asks for
+  entities as plain ids; `linkifyEntities` (page) and the workflow's `clean_report` (template v6) turn
+  service and host ids into links afterwards, and rewrite old `/ui/entity/` links. Assist's own answer
+  cannot be post-processed, so there entities stay plain ids.
 - **One engine analyzes; Assist follows up.** The app cannot read Assist's answer (an intent is
   one-way), so it cannot post it as a comment. Once the SRE agent has an annotation, the page's
   Assist button sends its verdict (IPv4 masked, at most 600 characters) and asks Assist not to redo

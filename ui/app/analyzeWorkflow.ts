@@ -3,6 +3,7 @@ import { workflowsClient, type Task, type Tasks, type WorkflowList } from "@dyna
 import { businessEventsClient } from "@dynatrace-sdk/client-classic-environment-v2";
 import { queryExecutionClient } from "@dynatrace-sdk/client-query";
 import { sendIntent } from "@dynatrace-sdk/navigation";
+import { linkifyEntities } from "./problemAnalysis";
 
 /**
  * The Analyze Problem workflows: the Blast radius page's Analyze-problem prompt, answered by the
@@ -20,7 +21,7 @@ import { sendIntent } from "@dynatrace-sdk/navigation";
  */
 
 /** Bump when the tasks change; the settings sheet then offers to create the new version. */
-export const TEMPLATE_VERSION = 5;
+export const TEMPLATE_VERSION = 6;
 export type WorkflowKind = "auto" | "onDemand";
 export const WORKFLOW_TITLES: Record<WorkflowKind, string> = {
   auto: "Analyze Problem (auto)",
@@ -91,16 +92,48 @@ export const cleanReport = (text: string): string => {
   return kept.join("\n");
 };
 
-const CLEAN_SCRIPT = `import { executionsClient } from "@dynatrace-sdk/client-automation";
+// String.raw keeps the regular expressions' backslashes as written; \x60 is a backtick.
+const CLEAN_SCRIPT = String.raw`import { executionsClient } from "@dynatrace-sdk/client-automation";
 
-// The agent's report without its lead-in sentence - the same rule as cleanReport in the app.
+// The agent's report without its lead-in sentence, with service and host ids turned into links - the
+// same rules as cleanReport and linkifyEntities in the app.
+const ROUTES = {
+  "SERVICE-": ["/ui/apps/dynatrace.services/explorer/services", "perspective=performance", "detailsId="],
+  "HOST-": ["/ui/apps/dynatrace.infraops/explorer/Compute/Hosts", "perspective=Health", "fullPageId="],
+};
+const PROTECTED = /(\x60\x60\x60[\s\S]*?\x60\x60\x60|\x60[^\x60\n]*\x60|\[[^\]\n]*\]\([^)\s]*\)|https?:\/\/[^\s)]+)/;
+const LINKABLE_ID = /(?:\/ui\/entity\/)?\b((?:SERVICE|HOST)-[0-9A-F]{16})\b/g;
+
+const clean = (text) => {
+  const lines = text.split("\n");
+  const first = lines.findIndex((line) => /^\s*(#{1,6}\s|---\s*$|\*\*)/.test(line));
+  let kept = first > 0 && first <= 5 ? lines.slice(first) : lines;
+  while (kept.length > 0 && /^\s*(---)?\s*$/.test(kept[0])) kept = kept.slice(1);
+  return kept.join("\n");
+};
+
+const linkify = (text, environmentUrl) => {
+  const base = environmentUrl.replace(/\/$/, "");
+  const link = (id) => {
+    const route = ROUTES[id.startsWith("SERVICE-") ? "SERVICE-" : "HOST-"];
+    return base + route[0] + "?" + route[1] + "&" + route[2] + encodeURIComponent(id);
+  };
+  return text.split(PROTECTED).map((part, index) => {
+    if (index % 2 === 0) return part.replace(LINKABLE_ID, (match, id) => "[" + id + "](" + link(id) + ")");
+    const classic = /\/ui\/entity\/((?:SERVICE|HOST)-[0-9A-F]{16})/.exec(part);
+    if (classic && part.startsWith("[")) return part.replace(/^\[[^\]]*\]/, (label) => label.replace("/ui/entity/", "")).replace(/\]\([^)\s]*\)$/, "](" + link(classic[1]) + ")");
+    if (classic) return link(classic[1]);
+    const code = /^\x60((?:SERVICE|HOST)-[0-9A-F]{16})\x60$/.exec(part);
+    return code ? "[" + part + "](" + link(code[1]) + ")" : part;
+  }).join("");
+};
+
 export default async function ({ execution_id }) {
   const task = await executionsClient.getTaskExecution({ executionId: execution_id, id: "${AGENT_TASK}" });
-  const lines = String(task.result?.text ?? "").split("\\n");
-  const first = lines.findIndex((line) => /^\\s*(#{1,6}\\s|---\\s*$|\\*\\*)/.test(line));
-  let kept = first > 0 && first <= 5 ? lines.slice(first) : lines;
-  while (kept.length > 0 && /^\\s*(---)?\\s*$/.test(kept[0])) kept = kept.slice(1);
-  return { text: kept.join("\\n") };
+  const prompt = await executionsClient.getTaskExecution({ executionId: execution_id, id: "build_prompt" });
+  const text = clean(String(task.result?.text ?? ""));
+  const environmentUrl = prompt.result?.environmentUrl;
+  return { text: environmentUrl ? linkify(text, environmentUrl) : text };
 }
 `;
 
@@ -391,5 +424,6 @@ export const readAnnotation = async (eventId: string): Promise<AnnotationState> 
   const at = Date.parse(String(record.timestamp));
   // A limit message posted as the answer by a workflow older than v3 is a failure too.
   const kind = name === ANNOTATION.started ? "started" : name === ANNOTATION.failed || isLimitMessage(text) ? "failed" : "done";
-  return { kind, at: Number.isFinite(at) ? at : 0, text: kind === "done" ? cleanReport(text) : text };
+  // Older annotations get the same treatment as new ones: lead-in dropped, entity ids linked.
+  return { kind, at: Number.isFinite(at) ? at : 0, text: kind === "done" ? linkifyEntities(cleanReport(text), getEnvironmentUrl()) : text };
 };

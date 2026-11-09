@@ -1,3 +1,4 @@
+import { getEnvironmentUrl } from "@dynatrace-sdk/app-environment";
 import { getLanguage, getRegionalFormat } from "@dynatrace-sdk/user-preferences";
 import { explainPrompt as buildPrompt, type AnalysisProblem, type LogScope } from "./problemAnalysis";
 
@@ -83,7 +84,7 @@ export const browserTimeZone = (): string | null => {
  * `problemAnalysis.ts`, shared with the `build-analysis-prompt` workflow action.
  */
 export const explainPrompt = (problem: AnalysisProblem, language: string | null, scope: LogScope, zone: string | null = browserTimeZone()): string =>
-  buildPrompt(problem, language, scope, zone);
+  buildPrompt(problem, language, scope, zone, getEnvironmentUrl());
 
 /**
  * The SRE agent's verdict, short enough for an Assist prompt: the paragraph after the Verdict heading,
