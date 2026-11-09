@@ -47,7 +47,8 @@ export const AutoAnalysisSheet = ({ show, onClose, status, onReload }: Props) =>
         </Paragraph>
         <Paragraph className="auto-analysis-note">
           <b>만들기</b>를 누르면 Workflows 앱이 정의가 채워진 상태로 열립니다. 저장하면 만든 사람의 권한으로 실행됩니다.
-          저장한 뒤 이 패널에서 <b>새로 고침</b>을 누르세요. 막 저장한 workflow는 1분쯤 지나야 트리거가 동작합니다.
+          저장한 뒤 이 패널에서 <b>새로 고침</b>을 누르세요. 막 저장한 workflow는 몇 분 지나야 트리거가 동작합니다.
+          처음 만든 workflow는 Workflows 앱의 <b>Authorization settings</b>에서 <b>ai:operator:execute</b>를 허용해야 SRE agent가 실행됩니다(이 권한 하나면 충분합니다).
         </Paragraph>
         {status.kind === "loading" && <Paragraph>workflow를 확인하는 중…</Paragraph>}
         {status.kind === "unknown" && <div className="query-message" role="status">

@@ -20,7 +20,7 @@ import { sendIntent } from "@dynatrace-sdk/navigation";
  */
 
 /** Bump when the tasks change; the settings sheet then offers to create the new version. */
-export const TEMPLATE_VERSION = 4;
+export const TEMPLATE_VERSION = 5;
 export type WorkflowKind = "auto" | "onDemand";
 export const WORKFLOW_TITLES: Record<WorkflowKind, string> = {
   auto: "Analyze Problem (auto)",
@@ -74,6 +74,33 @@ export default async function ({ execution_id }) {
   if (LIMIT_MESSAGES.some((message) => text.includes(message))) return "agent가 단계/도구 호출 한도에 도달해 분석을 끝내지 못했습니다";
   if (!text.trim()) return "엔진이 빈 응답을 반환했습니다";
   return "알 수 없는 오류 (stateInfo 없음)";
+}
+`;
+
+/**
+ * Drops the lead-in an agent writes before its report ("Now I have all the key evidence I need. Let
+ * me compile the final report.") - asked not to, it still did on P-2611383 and P-2611388. Keeps
+ * everything from the first heading, rule or bold line when that comes within the first five lines,
+ * then any blank or rule lines left on top. CLEAN_SCRIPT runs the same rule in the workflow.
+ */
+export const cleanReport = (text: string): string => {
+  const lines = text.split("\n");
+  const first = lines.findIndex((line) => /^\s*(#{1,6}\s|---\s*$|\*\*)/.test(line));
+  let kept = first > 0 && first <= 5 ? lines.slice(first) : lines;
+  while (kept.length > 0 && /^\s*(---)?\s*$/.test(kept[0])) kept = kept.slice(1);
+  return kept.join("\n");
+};
+
+const CLEAN_SCRIPT = `import { executionsClient } from "@dynatrace-sdk/client-automation";
+
+// The agent's report without its lead-in sentence - the same rule as cleanReport in the app.
+export default async function ({ execution_id }) {
+  const task = await executionsClient.getTaskExecution({ executionId: execution_id, id: "${AGENT_TASK}" });
+  const lines = String(task.result?.text ?? "").split("\\n");
+  const first = lines.findIndex((line) => /^\\s*(#{1,6}\\s|---\\s*$|\\*\\*)/.test(line));
+  let kept = first > 0 && first <= 5 ? lines.slice(first) : lines;
+  while (kept.length > 0 && /^\\s*(---)?\\s*$/.test(kept[0])) kept = kept.slice(1);
+  return { text: kept.join("\\n") };
 }
 `;
 
@@ -157,13 +184,21 @@ const taskDefinitions = (kind: WorkflowKind, appId: string): Record<string, Task
     predecessors: ["progress_agent"],
     conditions: { states: { progress_agent: "OK" } },
   },
-  report_agent: {
-    action: "dynatrace.davis.problems:annotate-and-link",
-    description: "Replaces the placeholder with the SRE agent's answer",
-    input: annotation(ANNOTATION.done, `{{ result("${AGENT_TASK}")["text"] }}`),
+  clean_report: {
+    action: "dynatrace.automations:run-javascript",
+    description: "Drops the agent's lead-in sentence before the report",
+    input: { script: CLEAN_SCRIPT },
     position: { x: 0, y: 5 },
     predecessors: [AGENT_TASK],
     conditions: { states: { [AGENT_TASK]: "ANY" }, custom: `{{ ${HAS_ANSWER} }}` },
+  },
+  report_agent: {
+    action: "dynatrace.davis.problems:annotate-and-link",
+    description: "Replaces the placeholder with the SRE agent's answer",
+    input: annotation(ANNOTATION.done, '{{ result("clean_report")["text"] }}'),
+    position: { x: 0, y: 6 },
+    predecessors: ["clean_report"],
+    conditions: { states: { clean_report: "OK" } },
   },
   [ERROR_TASK]: {
     action: "dynatrace.automations:run-javascript",
@@ -336,5 +371,5 @@ export const readAnnotation = async (eventId: string): Promise<AnnotationState> 
   const at = Date.parse(String(record.timestamp));
   // A limit message posted as the answer by a workflow older than v3 is a failure too.
   const kind = name === ANNOTATION.started ? "started" : name === ANNOTATION.failed || isLimitMessage(text) ? "failed" : "done";
-  return { kind, at: Number.isFinite(at) ? at : 0, text };
+  return { kind, at: Number.isFinite(at) ? at : 0, text: kind === "done" ? cleanReport(text) : text };
 };

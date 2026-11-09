@@ -183,6 +183,13 @@ const elapsed = (since: number) => {
   return seconds < 60 ? `${seconds}초` : `${Math.floor(seconds / 60)}분 ${seconds % 60}초`;
 };
 
+/**
+ * A run refused for lack of the agent permission. On a second tenant the workflow failed with "missing
+ * required scope: ai:operator:execute"; allowing that one permission in the workflow's Authorization
+ * settings fixed it - the 121 permissions the "full access" option listed were not needed.
+ */
+const MISSING_AI_PERMISSION = /ai:operator:execute|missing required scope/i;
+
 /** The SRE agent's answer for the selected problem, read from its annotation, or where its run stands. */
 const AgentAnalysis = ({ analysis, missing }: { analysis: ProblemAnalysis; missing: boolean }) => {
   switch (analysis.kind) {
@@ -196,6 +203,9 @@ const AgentAnalysis = ({ analysis, missing }: { analysis: ProblemAnalysis; missi
     case "error": return <p>분석을 요청하거나 읽지 못했습니다: {analysis.message}</p>;
     case "failed": return <>
       <p>분석을 완료하지 못했습니다 ({new Date(analysis.at).toLocaleString()}).</p>
+      {MISSING_AI_PERMISSION.test(analysis.text) && <p className="blast-agent-hint">
+        workflow에 AI agent 실행 권한이 없습니다. Workflows 앱에서 Analyze Problem workflow를 열고 <b>Authorization settings</b>에서 <b>ai:operator:execute</b>를 허용한 뒤 다시 분석하세요. 다른 권한은 필요하지 않습니다.
+      </p>}
       <Markdown>{analysis.text}</Markdown>
     </>;
     case "done": return <>

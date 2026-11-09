@@ -686,6 +686,12 @@ both on would analyze every problem twice). Facts checked on diw85600, 2026-11-0
     `annotation.id`, `annotation.problem_ids`, `event.name` (our progress marker) and the full text in
     `event.description` (5,762 characters, intact). `storage:events:read` is enough.
   A workflow has one trigger, so there are two - auto (Davis problems) and on demand - from one template.
+- **A new workflow needs `ai:operator:execute` consented in its Authorization settings.** On a second
+  tenant `call_agent` failed in 3 s: "Operator execute failed: Authorization token is missing required
+  scope: ai:operator:execute". The user already held the permission (it was absent from the 121
+  "missing permissions" the full-access option listed); allowing just that one in the workflow's
+  Authorization settings fixed it, with no IAM policy change. Workflows saved through the intent start
+  without that consent; on diw85600 it had been given earlier.
 - **One engine analyzes; Assist follows up.** The app cannot read Assist's answer (an intent is
   one-way), so it cannot post it as a comment. Once the SRE agent has an annotation, the page's
   Assist button sends its verdict (IPv4 masked, at most 600 characters) and asks Assist not to redo

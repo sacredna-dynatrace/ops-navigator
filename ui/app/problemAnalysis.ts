@@ -294,6 +294,10 @@ export const explainPrompt = (problem: AnalysisProblem, language: string | null,
     // Verified facts that Assist got wrong. The external-service one: a 94% failing "service"
     // (mdpt.co.kr) had no spans in three days - it is a domain the app calls, seen only as client spans
     // on the caller, and its name was only in the classic model.
+    // P-2611388: the SRE agent sampled failed spans with a limit, reported ":9079 - 2 POST spans" and
+    // missed 1,547 failed calls to one external IP that started before the scan it blamed; and it put
+    // per-minute counts two minutes late, which made the scan look like the cause.
+    "Failed spans: count them over the whole window for every affected service, grouped by server.address (summarize count()) - never judge from a limited sample. Timeseries values belong to the start of their interval: report each value at its bucket's start time.",
     `Known here: ${[
       rum ? "user.events time = start_time" : "",
       "failed span = span.status_code == \"error\" or request.is_failed == true",
@@ -319,7 +323,7 @@ export const explainPrompt = (problem: AnalysisProblem, language: string | null,
     "Write the whole answer as one final message: it is read on its own, so never refer to an earlier message or a report 'above', and add no closing summary after it.",
     // Assist wrote "03:25 KST" for 03:25 UTC (12:25 KST) in its verdict and labelled UTC log times as
     // KST (P-2611156). DQL returns UTC, so the conversion has to be asked for explicitly.
-    zone ? `Give every time in ${zone}${offset ? ` (${offset})` : ""} with its zone label. Query results are in UTC: convert each one before labelling it${offset ? ` (add ${offset.replace("UTC", "")})` : ""}, and never put the ${zone} label on a UTC value.` : "",
+    zone ? `Give every time in ${zone}${offset ? ` (${offset})` : ""} with its zone label, including times of day in prose such as a daily pattern. Query results are in UTC: convert each one before labelling it${offset ? ` (add ${offset.replace("UTC", "")})` : ""}, and never put the ${zone} label on a UTC value.` : "",
     language ? `Answer in ${language}.` : "",
   ].filter(Boolean).join("\n");
 };
