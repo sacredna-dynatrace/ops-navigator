@@ -7,12 +7,12 @@
 }
 
 .dashboard-page { min-height: calc(100vh - 56px); padding: 32px 40px 48px; color: var(--dashboard-ink); background: radial-gradient(circle at 82% 2%, #e1f5f3 0, transparent 28%), var(--dashboard-background); font-family: "Segoe UI", sans-serif; }
-.dashboard-heading { display: flex; justify-content: space-between; gap: 32px; align-items: end; max-width: 1440px; margin: 0 auto 28px; }
+.dashboard-heading { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 32px; align-items: end; max-width: 1440px; margin: 0 auto 28px; }
 .eyebrow { margin: 0 0 10px; color: #087f80; font-size: 11px; font-weight: 700; letter-spacing: 1.4px; }
 .dashboard-heading h1 { margin: 0; font-size: 32px; letter-spacing: 0; }
 .version-badge { display: inline-block; margin-left: 10px; padding: 4px 7px; border: 1px solid #bae6fd; border-radius: 4px; color: #0369a1; background: #f0f9ff; vertical-align: middle; font-size: 11px; font-weight: 700; letter-spacing: .5px; }
 .dashboard-description { max-width: 620px; margin: 10px 0 0; color: var(--dashboard-muted); font-size: 14px; }
-.dashboard-actions { display: flex; align-items: center; gap: 10px; color: var(--dashboard-muted); font-size: 12px; font-weight: 600; }
+.dashboard-actions { flex: none; display: flex; align-items: center; gap: 10px; color: var(--dashboard-muted); font-size: 12px; font-weight: 600; }
 .query-message { display: flex; align-items: center; gap: 12px; max-width: 1440px; margin: 0 auto 18px; padding: 13px 16px; border: 1px solid #bae6fd; border-radius: 6px; background: #f0f9ff; color: #075985; font-size: 12px; }
 .query-message span { flex: 1; }
 .query-error { border-color: #fecaca; background: #fff7f7; color: #991b1b; align-items: start; }
@@ -58,9 +58,10 @@
 .live-indicator { display: flex; align-items: center; gap: 6px; color: #16805b; font-size: 11px; font-weight: 700; }
 .live-indicator i { width: 7px; height: 7px; border-radius: 50%; background: var(--status-ok); box-shadow: 0 0 0 4px #dcfce7; }
 .topology-shell { position: relative; min-height: 480px; padding: 22px 20px 16px; overflow-x: auto; }
-.topology-column-labels { position: absolute; top: 4px; left: 20px; width: 1000px; height: 20px; color: var(--dashboard-muted); font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .7px; }
-.topology-column-labels span { position: absolute; width: 120px; text-align: center; }
-.topology-canvas { display: block; width: 1000px; min-width: 1000px; height: 430px; margin: 18px auto 0; border: 1px solid #edf2f7; border-radius: 5px; }
+.topology-fit { width: 100%; max-width: 1000px; margin: 0 auto; }
+.topology-column-labels { position: relative; height: 20px; color: var(--dashboard-muted); font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .7px; }
+.topology-column-labels span { position: absolute; top: 0; transform: translateX(-50%); white-space: nowrap; text-align: center; }
+.topology-canvas { display: block; width: 100%; height: auto; margin: 0; border: 1px solid #edf2f7; border-radius: 5px; }
 .topology-node { cursor: pointer; outline: none; }
 .topology-node:focus rect, .topology-node:hover rect { filter: drop-shadow(0 3px 5px rgb(15 23 42 / 14%)); }
 .topology-node-name { fill: var(--dashboard-ink); font-size: 10.5px; font-weight: 700; }
@@ -81,8 +82,9 @@
 .topology-node-meta, .topology-edge-label { fill: var(--dashboard-muted); font-size: 10px; }
 .topology-edge-label { paint-order: stroke; stroke: #fff; stroke-width: 4px; stroke-linejoin: round; }
 .topology-overflow-label { fill: var(--dashboard-muted); font-size: 11px; font-style: italic; }
-.topology-legend { display: flex; justify-content: center; gap: 22px; margin-top: 12px; color: var(--dashboard-muted); font-size: 11px; }
-.topology-legend span { display: inline-flex; align-items: center; gap: 6px; }
+.topology-legend { display: flex; flex-wrap: wrap; justify-content: center; gap: 6px 22px; margin-top: 12px; color: var(--dashboard-muted); font-size: 11px; }
+.topology-legend span { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+.topology-legend svg { flex: none; }
 .topology-legend .legend-edge { width: 34px; height: 10px; }
 .topology-legend-divider { width: 1px; height: 12px; background: var(--dashboard-line); }
 .clear-selection { display: block; margin: 10px auto 0; border: 0; background: transparent; color: #0369a1; cursor: pointer; font-size: 11px; }

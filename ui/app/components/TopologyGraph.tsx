@@ -486,10 +486,11 @@ export const TopologyGraph = ({ nodes, edges, sortBy, perColumn = DEFAULT_DRAWN_
 
   return (
     <div className="topology-shell">
+      <div className="topology-fit">
       <div className="topology-column-labels" aria-hidden="true">
-        {(Object.keys(columnX) as TopologyNode["kind"][]).map((kind) => <span key={kind} style={{ left: columnX[kind] - NODE_HALF }}>{columnLabels[kind]}</span>)}
+        {(Object.keys(columnX) as TopologyNode["kind"][]).map((kind) => <span key={kind} style={{ left: `${(columnX[kind] / CANVAS_WIDTH) * 100}%` }}>{columnLabels[kind]}</span>)}
       </div>
-      <svg className="topology-canvas" style={{ height: canvasHeight }} viewBox={`0 0 ${CANVAS_WIDTH} ${canvasHeight}`} role="img" aria-label="Application, service, Kubernetes and infrastructure topology">
+      <svg className="topology-canvas" viewBox={`0 0 ${CANVAS_WIDTH} ${canvasHeight}`} role="img" aria-label="Application, service, Kubernetes and infrastructure topology">
         <defs>
           <pattern id="topology-grid" width="24" height="24" patternUnits="userSpaceOnUse"><circle cx="2" cy="2" r="1.2" fill={GRID} opacity="0.42" /></pattern>
           {/*
@@ -582,6 +583,7 @@ export const TopologyGraph = ({ nodes, edges, sortBy, perColumn = DEFAULT_DRAWN_
           return <g key={node.id} className="topology-node" role="button" tabIndex={0} aria-label={`${node.name}, ${formatNodeValue(node)}${problems > 0 ? `, ${problems} open problems` : ", no open problems"}`} onClick={() => selectNode(node)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") selectNode(node); }}><rect x={position.x - NODE_HALF} y={position.y - 29} width={NODE_WIDTH} height="58" rx="8" fill="white" stroke={selected ? ACTIVE : outline(node)} strokeWidth={selected ? 3 : 1.5} /><StatusMark x={position.x - NODE_HALF + 16} y={position.y} problem={problems > 0} /><title>{problems > 0 ? `${node.name} - ${problems} open problem${problems === 1 ? "" : "s"}` : node.name}</title><text x={position.x - NODE_HALF + 28} y={position.y - 4} className="topology-node-name">{node.name.length > 14 ? `${node.name.slice(0, 13)}…` : node.name}</text><text x={position.x - NODE_HALF + 28} y={position.y + 14} className="topology-node-meta">{formatNodeValue(node)}</text>{(node.members ?? node.processes) && <g className="topology-node-badge"><rect x={position.x + NODE_HALF - 38} y={position.y - 38} width="34" height="18" rx="9" fill={outline(node)} /><text x={position.x + NODE_HALF - 21} y={position.y - 25} textAnchor="middle">×{(node.members ?? node.processes)?.length}</text></g>}</g>;
         })}
       </svg>
+      </div>
       {/* Edge swatches reuse the node palette so the legend cannot drift from the CSS. */}
       <div className="topology-legend">
         {/* The column swatches this replaces were redundant - each column is labelled directly
