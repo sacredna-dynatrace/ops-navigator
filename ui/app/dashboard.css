@@ -205,7 +205,9 @@
 .blast-edge.is-event path { stroke: #94a3b8; stroke-dasharray: 2 4; }
 .blast-root em { color: var(--dashboard-muted); font-size: 11px; font-style: normal; }
 .blast-actions { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
-.blast-analysis-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; width: 100%; color: var(--dashboard-muted); font-size: 12px; }
+.blast-analysis-heading { flex-wrap: wrap; display: flex; align-items: center; justify-content: space-between; gap: 8px; width: 100%; color: var(--dashboard-muted); font-size: 12px; }
+.blast-heading-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.blast-agent-expanded { max-width: 860px; font-size: 14px; line-height: 1.6; }
 /* SRE agent analysis: run time and trigger above the answer. */
 .blast-agent-hint { padding: 6px 8px; border-left: 3px solid #d97706; background: rgb(217 119 6 / 8%); color: var(--dashboard-ink) !important; }
 .blast-agent-hint p { margin: 0 0 4px; color: var(--dashboard-ink); }

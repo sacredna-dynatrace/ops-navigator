@@ -3,6 +3,7 @@ import type { Timeframe } from "@dynatrace/strato-components/core";
 import { SegmentSelector, TimeframeSelector, TIMEFRAME_SELECTOR_PRESETS, useSegments } from "@dynatrace/strato-components/filters";
 import { Markdown } from "@dynatrace/strato-components/content";
 import { Button } from "@dynatrace/strato-components/buttons";
+import { Sheet } from "@dynatrace/strato-components/overlays";
 import { sendIntent } from "@dynatrace-sdk/navigation";
 import { useNavigate } from "react-router-dom";
 import { SearchInput, Select, ToggleButtonGroup } from "@dynatrace/strato-components/forms";
@@ -158,8 +159,8 @@ const matchesSearch = (problem: BlastProblem, needle: string) => {
  * at once. After: a follow-up with the agent's verdict, left for the user to finish with a question -
  * one engine analyzes, so the same problem is not analyzed twice.
  */
-const AnalyzeButton = ({ problem, language, services, agentReport }: { problem: BlastProblem; language: AnswerLanguage; services: Map<string, ServiceInfo>; agentReport: string | null }) =>
-  <Button size="condensed" onClick={() => sendIntent(agentReport
+const AnalyzeButton = ({ problem, language, services, agentReport, variant }: { problem: BlastProblem; language: AnswerLanguage; services: Map<string, ServiceInfo>; agentReport: string | null; variant?: "emphasized" }) =>
+  <Button size="condensed" variant={variant} onClick={() => sendIntent(agentReport
     ? { prompt: followUpPrompt(problem, agentReport, answerLanguage(language)), execute: false }
     : { prompt: explainPrompt(problem, answerLanguage(language), logScopeOf(problem, (id) => services.get(id)?.hosts)), execute: true }, ASSIST_INTENT)}>
     <Button.Prefix><AiIcon /></Button.Prefix>
@@ -174,7 +175,7 @@ const AnalyzeButton = ({ problem, language, services, agentReport }: { problem: 
 const AgentButton = ({ missing, analysis, onRun }: { missing: boolean; analysis: ProblemAnalysis; onRun: () => void }) => {
   const pending = analysis.kind === "requested" || analysis.kind === "running" || analysis.kind === "loading";
   const label = pending && analysis.kind !== "loading" ? "SRE agent 분석 중…" : analysis.kind === "done" || analysis.kind === "failed" ? "SRE agent로 다시 분석" : "SRE agent로 분석";
-  return <Button size="condensed" disabled={missing || pending} onClick={onRun} title={missing ? "자동 분석 설정에서 on demand workflow를 먼저 만드세요" : undefined}>
+  return <Button size="condensed" variant="emphasized" disabled={missing || pending} onClick={onRun} title={missing ? "자동 분석 설정에서 on demand workflow를 먼저 만드세요" : undefined}>
     <Button.Prefix><AiIcon /></Button.Prefix>
     {label}
   </Button>;
@@ -281,6 +282,7 @@ export const BlastRadius = () => {
   const description = useProblemDescription(selected?.displayId ?? null, resolved);
   const analyzeWorkflows = useAnalyzeWorkflows();
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [agentExpanded, setAgentExpanded] = useState(false);
   // Missing only when the workflows were read and there is no on-demand one; unknown counts as present.
   const onDemandMissing = analyzeWorkflows.status.kind === "ready" && !analyzeWorkflows.status.workflows.onDemand;
   const agent = useProblemAgentAnalysis(selected?.eventId || null, selected?.displayId ?? null);
@@ -332,6 +334,9 @@ export const BlastRadius = () => {
         <Button variant="emphasized" onClick={() => setSettingsOpen(true)}>자동 분석 설정</Button>
       </div>
     </section>
+    <Sheet title="SRE agent 분석" show={agentExpanded} onDismiss={() => setAgentExpanded(false)} actions={<Button onClick={() => setAgentExpanded(false)}>닫기</Button>}>
+      <div className="blast-agent-expanded"><AgentAnalysis analysis={agent.state} missing={onDemandMissing} /></div>
+    </Sheet>
     <AutoAnalysisSheet show={settingsOpen} onClose={() => setSettingsOpen(false)} status={analyzeWorkflows.status} onReload={() => void analyzeWorkflows.reload()} />
     {errors.length > 0 && <div className="query-message query-error" role="alert"><div className="query-error-list"><strong>{errors.length} of the page’s queries failed.</strong>{errors.map((item) => <span key={item.label}><b>{item.label}:</b> {item.message}</span>)}</div></div>}
     {truncated.length > 0 && <div className="query-message" role="status">{truncated.map((key) => QUERY_LABELS[key]).join(", ")} hit the result limit, so the list or the rings may be incomplete. Narrow the timeframe.</div>}
@@ -430,10 +435,10 @@ export const BlastRadius = () => {
           <span>Confirmed affected</span>
           <div className="workload-pods">{selected.affected.map((entity) => <div className="workload-pod" key={entity.id}><StatusIcon problem />{entityName(entity.id, entity.name)}<b>{ENTITY_KO[entityType(entity.id)] ?? entityType(entity.id).toLowerCase()}</b></div>)}</div>
           <hr />
-          <div className="blast-analysis-heading"><span>SRE agent 분석</span><AgentButton missing={onDemandMissing} analysis={agent.state} onRun={() => void agent.run()} /></div>
+          <div className="blast-analysis-heading"><span>SRE agent 분석</span><span className="blast-heading-actions">{agent.state.kind === "done" && <Button size="condensed" onClick={() => setAgentExpanded(true)}>크게 보기</Button>}<AgentButton missing={onDemandMissing} analysis={agent.state} onRun={() => void agent.run()} /></span></div>
           <div className="blast-description"><AgentAnalysis analysis={agent.state} missing={onDemandMissing} /></div>
           <hr />
-          <div className="blast-analysis-heading"><span>Davis 분석</span><AnalyzeButton problem={selected} language={language} services={services} agentReport={agent.state.kind === "done" ? agent.state.text : null} /></div>
+          <div className="blast-analysis-heading"><span>Davis 분석</span><AnalyzeButton variant="emphasized" problem={selected} language={language} services={services} agentReport={agent.state.kind === "done" ? agent.state.text : null} /></div>
           <div className="blast-description">
             {description.isLoading ? <p>Davis 분석을 불러오는 중…</p>
               : description.error ? <p>분석을 불러오지 못했습니다: {description.error}</p>
