@@ -3,7 +3,6 @@ import type { Timeframe } from "@dynatrace/strato-components/core";
 import { TimeframeSelector, TIMEFRAME_SELECTOR_PRESETS } from "@dynatrace/strato-components/filters";
 import { MessageContainer } from "@dynatrace/strato-components/content";
 import { Button } from "@dynatrace/strato-components/buttons";
-import { getAppVersion } from "@dynatrace-sdk/app-environment";
 import { RefreshControl } from "../components/RefreshControl";
 import { TopologyGraph, formatEdgeValue, formatNodeValue, formatThroughput, type TopologyNode, type TopologySort } from "../components/TopologyGraph";
 import { buildTileLinks, buildEntityLink } from "../components/TileLinks";
@@ -20,8 +19,6 @@ import { useTopologyData, type TopologyQueryKey } from "../hooks/useTopologyData
 import { useNodeForecast, FORECAST_HORIZON_HOURS } from "../hooks/useNodeForecast";
 
 // Read from the manifest at runtime so the badge cannot drift from app.config.json.
-const appVersion = getAppVersion();
-const APP_VERSION = appVersion.startsWith("dt.missing") ? "dev" : appVersion;
 
 /** Forecast values are plain numbers, so they are formatted here rather than through a node. */
 const formatForecast = (value: number, unit: string) => `${value >= 100 ? Math.round(value) : Number(value.toFixed(2))} ${unit}`;
@@ -189,7 +186,7 @@ export const Home = () => {
   }, [autoRefreshMs]);
 
   return <main className="dashboard-page" style={paletteVars as React.CSSProperties}>
-    <section className="dashboard-heading"><div><p className="eyebrow">SERVICE FLOW / LIVE OVERVIEW</p><h1>Application topology <span className="version-badge">v{APP_VERSION}</span></h1><p className="dashboard-description">Follow request traffic from real users through services to the infrastructure carrying the load.</p></div><div className="dashboard-actions"><TimeframeSelector value={timeframe} onChange={(value) => { if (value) { setTimeframe(value); setRefreshedAt(Date.now()); setSelectedNode(null); } }}><TimeframeSelector.Presets>{TIMEFRAME_SELECTOR_PRESETS.map((preset) => <TimeframeSelector.PresetItem key={`${preset.from}-${preset.to}`} value={preset} />)}<TimeframeSelector.PresetItem value={yesterdayPreset}>Yesterday</TimeframeSelector.PresetItem></TimeframeSelector.Presets></TimeframeSelector><RefreshControl intervalMs={autoRefreshMs} onIntervalChange={setAutoRefreshMs} onRefresh={refresh} isRefreshing={isLoading} /></div></section>
+    <section className="dashboard-heading"><div><p className="eyebrow">SERVICE FLOW / LIVE OVERVIEW</p><h1>Application topology</h1><p className="dashboard-description">Follow request traffic from real users through services to the infrastructure carrying the load.</p></div><div className="dashboard-actions"><TimeframeSelector value={timeframe} onChange={(value) => { if (value) { setTimeframe(value); setRefreshedAt(Date.now()); setSelectedNode(null); } }}><TimeframeSelector.Presets>{TIMEFRAME_SELECTOR_PRESETS.map((preset) => <TimeframeSelector.PresetItem key={`${preset.from}-${preset.to}`} value={preset} />)}<TimeframeSelector.PresetItem value={yesterdayPreset}>Yesterday</TimeframeSelector.PresetItem></TimeframeSelector.Presets></TimeframeSelector><RefreshControl intervalMs={autoRefreshMs} onIntervalChange={setAutoRefreshMs} onRefresh={refresh} isRefreshing={isLoading} /></div></section>
     {errors.length > 0 && <div className="query-message query-error" role="alert"><div className="query-error-list"><strong>{errors.length} of the dashboard’s queries failed. The rest of the page is still accurate.</strong>{errors.map((item) => <span key={item.label}><b>{item.label}:</b> {item.message}</span>)}</div><button type="button" onClick={refresh}>Retry</button></div>}
     {/* Truncation is silent on the platform side: a capped query returns its maximum and no error.
         A ranking built on a capped result can be wrong without anything on the page looking wrong,
