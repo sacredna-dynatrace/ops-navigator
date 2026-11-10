@@ -1,11 +1,13 @@
-# Overview Dashboard
+# Ops Navigator
+
+> 이전 이름은 Overview Dashboard(앱 id `my.overview.dashboard`)입니다. 0.0.149부터 앱 id가 `my.ops.navigator`로 바뀌어 새 앱으로 설치됩니다.
 
 Dynatrace AppEngine 앱입니다. 세 페이지로 구성됩니다.
 
 | 페이지 | 경로 | 하는 일 |
 | --- | --- | --- |
-| **Topology** | `/` | RUM 애플리케이션 → 서비스 → Kubernetes 워크로드 / 프로세스 그룹 → 인프라의 트래픽 맵 |
-| **Blast radius** | `/blast-radius` | Davis 문제 하나를 근본 원인 중심의 고리로 그려 영향 범위를 보여 줌 |
+| **Blast radius** | `/blast-radius` (첫 화면) | Davis 문제 하나를 근본 원인 중심의 고리로 그려 영향 범위를 보여 줌 |
+| **Topology** | `/topology` | RUM 애플리케이션 → 서비스 → Kubernetes 워크로드 / 프로세스 그룹 → 인프라의 트래픽 맵 |
 | **Starfield** | `/starfield` | 요청 하나하나를 별로 찍은 응답시간 산점도. 영역을 드래그해 트레이스를 엶 |
 
 쿼리를 고치기 전에 [docs/dynatrace-query-notes.md](docs/dynatrace-query-notes.md)를 먼저 읽어 주세요.
@@ -168,7 +170,7 @@ Davis 문제를 하나 고르면 근본 원인을 가운데 두고, 그것에 �
 
   ```dql
   fetch dt.system.query_executions, from: now()-1d
-  | filter table == "spans" and client.application_context == "my.overview.dashboard" and sampling_ratio == 1
+  | filter table == "spans" and client.application_context == "my.ops.navigator" and sampling_ratio == 1
   | fields query_start, scanned_gib = toDouble(scanned_bytes) / 1073741824, query_string
   | sort scanned_gib desc
   | limit 5

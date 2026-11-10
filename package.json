@@ -1,5 +1,5 @@
 {
-  "name": "overview-dashboard",
+  "name": "ops-navigator",
   "version": "0.0.0",
   "description": "A starting project with routing, fetching data, and charting",
   "scripts": {

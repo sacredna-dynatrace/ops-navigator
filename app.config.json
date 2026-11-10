@@ -2,10 +2,10 @@
   "$schema": "./.dt-app/app.config.schema.json",
   "environmentUrl": "https://diw85600.apps.dynatrace.com/",
   "app": {
-    "name": "OverviewDashboard",
-    "version": "0.0.146",
-    "description": "Explore request traffic from RUM applications through services to infrastructure",
-    "id": "my.overview.dashboard",
+    "name": "Ops Navigator",
+    "version": "0.0.149",
+    "description": "See how your system connects, where problems spread, and let AI explain why",
+    "id": "my.ops.navigator",
     "scopes": [
       { "name": "storage:buckets:read", "comment": "Required for every Grail query - without it queries succeed but return zero records" },
       { "name": "storage:spans:read", "comment": "Read distributed trace spans for service relationships" },

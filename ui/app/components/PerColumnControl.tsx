@@ -5,7 +5,7 @@ import { FormatListNumberedIcon } from "@dynatrace/strato-icons";
 import { DEFAULT_DRAWN_PER_COLUMN, DRAWN_PER_COLUMN_OPTIONS } from "./TopologyGraph";
 
 /** How many nodes each map column draws. The choice is remembered per browser. */
-const STORAGE_KEY = "overview-dashboard.topology.perColumn";
+const STORAGE_KEY = "ops-navigator.topology.perColumn";
 export const readPerColumn = (): number => {
   try {
     const stored = Number(window.localStorage.getItem(STORAGE_KEY));

@@ -1,7 +1,7 @@
 import { SegmentsProvider } from "@dynatrace/strato-components/filters";
 import { PageLayout } from "@dynatrace/strato-components/layouts";
 import React from "react";
-import { Route, Routes } from "react-router-dom";
+import { Navigate, Route, Routes } from "react-router-dom";
 import { Header } from "./components/Header";
 import { SegmentQueryScope } from "./components/SegmentQueryScope";
 import { TagFilterProvider } from "./components/SharedFilters";
@@ -22,8 +22,11 @@ export const App = () => {
           <SegmentQueryScope>
             <TagFilterProvider>
               <Routes>
-                <Route path="/" element={<Home />} />
+                {/* Blast radius is the landing page: problem, impact and analysis in one place. "/" used
+                    to be the topology map; old links to it now land here. */}
+                <Route path="/" element={<Navigate to="/blast-radius" replace />} />
                 <Route path="/blast-radius" element={<BlastRadius />} />
+                <Route path="/topology" element={<Home />} />
                 <Route path="/starfield" element={<Starfield />} />
               </Routes>
             </TagFilterProvider>

@@ -28,12 +28,12 @@ export const WORKFLOW_TITLES: Record<WorkflowKind, string> = {
   onDemand: "Analyze Problem (on demand)",
 };
 /** Business event the page sends to run the on-demand workflow. */
-export const REQUEST_EVENT_TYPE = "overview-dashboard.analyze-problem.request";
+export const REQUEST_EVENT_TYPE = "ops-navigator.analyze-problem.request";
 const AGENT_TASK = "call_agent";
 const ERROR_TASK = "error_details_agent";
 /** In the first task's script, so a saved workflow tells which template version it came from. */
-const MARKER = (kind: WorkflowKind) => `overview-dashboard analyze-problem template v${TEMPLATE_VERSION} ${kind}`;
-const MARKER_PATTERN = /overview-dashboard analyze-problem template v(\d+)/;
+const MARKER = (kind: WorkflowKind) => `ops-navigator analyze-problem template v${TEMPLATE_VERSION} ${kind}`;
+const MARKER_PATTERN = /ops-navigator analyze-problem template v(\d+)/;
 
 // Scripts run in the workflow's JavaScript runtime. They avoid template literals so this file can
 // hold them in plain strings.

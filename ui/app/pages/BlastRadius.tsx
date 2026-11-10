@@ -4,6 +4,7 @@ import { SegmentSelector, TimeframeSelector, TIMEFRAME_SELECTOR_PRESETS, useSegm
 import { Markdown } from "@dynatrace/strato-components/content";
 import { Button } from "@dynatrace/strato-components/buttons";
 import { sendIntent } from "@dynatrace-sdk/navigation";
+import { useNavigate } from "react-router-dom";
 import { SearchInput, Select, ToggleButtonGroup } from "@dynatrace/strato-components/forms";
 import { AiIcon, ExternalLinkIcon } from "@dynatrace/strato-icons";
 import { BlastRadiusGraph, buildBlastLayout, type BlastLayout, type BlastLinkOf } from "../components/BlastRadiusGraph";
@@ -113,7 +114,7 @@ const originLabel = (problem: BlastProblem) =>
     : `Events: ${eventsLabel(problem)}`;
 
 /** The answer language is remembered per browser; storage can be unavailable, so it is optional. */
-const LANGUAGE_KEY = "overview-dashboard.blast.answerLanguage";
+const LANGUAGE_KEY = "ops-navigator.blast.answerLanguage";
 const readLanguage = (): AnswerLanguage => {
   try {
     const stored = window.localStorage.getItem(LANGUAGE_KEY);
@@ -221,6 +222,7 @@ const AgentAnalysis = ({ analysis, missing }: { analysis: ProblemAnalysis; missi
 const withoutTitle = (markdown: string) => markdown.replace(/^\s*#\s+[^\n]*\n+/, "");
 
 export const BlastRadius = () => {
+  const navigate = useNavigate();
   const [timeframe, setTimeframe] = useState<Timeframe>(initialTimeframe);
   const [refreshedAt, setRefreshedAt] = useState(() => Date.now());
   const [category, setCategory] = useState<string | null>(null);
@@ -398,7 +400,13 @@ export const BlastRadius = () => {
             <span><svg className="legend-edge" viewBox="0 0 34 10" aria-hidden="true"><path d="M1,5 H33" stroke="var(--tier-infrastructure)" strokeWidth="1.4" strokeDasharray="3 3" /></svg> Runs on</span>
             <span><svg className="legend-edge" viewBox="0 0 34 10" aria-hidden="true"><circle cx="17" cy="5" r="4" fill="#fff" stroke="var(--virtual-text)" strokeWidth="1.4" /><circle cx="17" cy="5" r="1.6" fill="var(--virtual-text)" /></svg> Concurrent event, no causal link</span>
           </div>
-        </> : <div className="path-detail"><p>{isLoading ? "Loading…" : "Select a problem to draw its blast radius."}</p></div>}
+        </> : <div className="path-detail">{isLoading ? <p>Loading…</p>
+          // The landing page on a quiet tenant: say so, and offer the map instead of an empty canvas.
+          : problems.length === 0 && !searchedId ? <>
+            <p>No problems in this timeframe - nothing to draw.</p>
+            <p>The topology map shows how traffic flows from applications through services to infrastructure.</p>
+            <Button variant="emphasized" onClick={() => { void navigate("/topology"); }}>Open topology</Button>
+          </> : <p>Select a problem to draw its blast radius.</p>}</div>}
       </div>
       <aside className="details-panel">
         {selected && layout ? <div className="selected-detail">
