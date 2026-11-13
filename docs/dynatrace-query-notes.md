@@ -518,8 +518,10 @@ RUM on that tenant while Davis still counts users. It is a real user count, not 
   display id) with `from`/`to`; process via `PROCESS-<hex>` where the hex equals the
   `PROCESS_GROUP_INSTANCE` one; workload via its Smartscape id, which does **not** share the hex of
   the classic `CLOUD_APPLICATION-…` (e.g. CLOUD_APPLICATION-093B… is K8S_DEPLOYMENT-0226…), so it is
-  looked up through `id_classic` across K8S_DEPLOYMENT/STATEFULSET/DAEMONSET/CRONJOB/JOB. Types without
-  a verified link (process group, custom device, …) are not linked.
+  looked up through `id_classic` across K8S_DEPLOYMENT/STATEFULSET/DAEMONSET/CRONJOB/JOB. Disks open through Infrastructure & Operations' `view_disk` intent and clusters on the Kubernetes
+  app's cluster list, both on the problem's window ±30 min. Other infrastructure types without a
+  verified link (process group, queue, …) link to the problem's host (`dt.entity.host`) when it names
+  exactly one; with several, or none (custom devices), they stay unlinked.
 
 ### Analyze problem (Dynatrace Assist)
 

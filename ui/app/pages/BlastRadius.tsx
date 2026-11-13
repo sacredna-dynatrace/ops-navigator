@@ -66,6 +66,12 @@ const ENTITY_KO: Record<string, string> = {
 };
 const IMPACT_KO: Record<string, string> = { Services: "서비스", Infrastructure: "인프라", Application: "애플리케이션", Environment: "환경" };
 const entityType = (id: string) => id.split("-")[0];
+/**
+ * Entity types that are not infrastructure. Every other type without a page of its own (process
+ * group, queue, custom device, network interface, ...) links to the problem's host instead.
+ */
+const NOT_INFRASTRUCTURE = new Set(["SERVICE", "APPLICATION", "MOBILE_APPLICATION", "CUSTOM_APPLICATION", "SYNTHETIC_TEST", "HTTP_CHECK", "EXTERNAL_SYNTHETIC_TEST",
+  "CLOUD_APPLICATION", "CLOUD_APPLICATION_INSTANCE", "KUBERNETES_CLUSTER", "AWS_LAMBDA_FUNCTION"]);
 const koDuration = (start: string, end: string) => {
   const minutes = durationMinutes(start, end);
   if (!Number.isFinite(minutes) || minutes < 0) return null;
@@ -288,7 +294,7 @@ export const BlastRadius = () => {
   const agent = useProblemAgentAnalysis(selected?.eventId || null, selected?.displayId ?? null);
 
   /** The entity's own app, for the types with a verified link; null for everything else. */
-  const linkFor = (id: string): string | null => {
+  const ownLink = (id: string): string | null => {
     const type = entityType(id);
     if (type === "SERVICE") return buildEntityLink("service", id, timeframe);
     if (type === "HOST") return buildEntityLink("infrastructure", id, timeframe);
@@ -305,6 +311,17 @@ export const BlastRadius = () => {
       return frontend && selected ? buildProblemFrontendLink(frontend, selected) : null;
     }
     return null;
+  };
+  /**
+   * The entity's own page, or for an infrastructure entity without one, the host Davis attached to the
+   * problem - only when there is exactly one, since with several the page cannot tell which is the
+   * entity's. On isb54165 that covers 12 of 13 process-group and 1 of 8 queue problems over 30 days;
+   * custom devices carry no host and stay unlinked.
+   */
+  const linkFor = (id: string): string | null => {
+    const own = ownLink(id);
+    if (own || NOT_INFRASTRUCTURE.has(entityType(id)) || selected?.hostIds.length !== 1) return own;
+    return buildEntityLink("infrastructure", selected.hostIds[0], timeframe);
   };
   const problemLink = selected?.eventId ? buildProblemLink(selected.eventId, timeframe) : null;
   const linkOf: BlastLinkOf = (node) => {

@@ -47,6 +47,8 @@ export type AnalysisProblem = {
   originName: string | null;
   /** Distinct hosts Davis attached to the problem, for describing concurrent events. */
   hostCount: number;
+  /** Those hosts' ids, distinct. Infrastructure entities without a page of their own link to the host when there is exactly one. */
+  hostIds: string[];
   /**
    * Where the problem's logs live, as Davis recorded it: Kubernetes namespaces, workloads and
    * clusters, and process groups. Logs here carry no service id (none of a 15-minute sample on
@@ -145,6 +147,7 @@ export const problemFromRecord = (record: DqlRecord): AnalysisProblem | null => 
     originId: origin === "root" ? rootId : origin === "self" ? affected[0].id : null,
     originName: origin === "root" ? rootName : origin === "self" ? affected[0].name : null,
     hostCount: optionalNumber(record, "host_count") ?? 0,
+    hostIds: [...new Set(strings(record, "hosts"))],
     scope: {
       namespaces: strings(record, "k8s_namespaces"),
       workloads: strings(record, "k8s_workloads"),
