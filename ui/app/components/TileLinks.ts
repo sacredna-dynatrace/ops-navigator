@@ -168,6 +168,17 @@ export const buildDiskLink = (diskId: string, problem: { start: string; end: str
   return `${environment()}/ui/apps/${"dynatrace.infraops"}/intent/${"view_disk"}#${encodeURIComponent(JSON.stringify(payload))}`;
 };
 
+/**
+ * Kubernetes clusters in the Kubernetes app, sorted unhealthy first - the view the user asked for on
+ * isb54165. It is the cluster list, not one cluster: a problem carries the classic
+ * KUBERNETES_CLUSTER- id, and the app selects by Smartscape id, which the page does not have. With the
+ * worst health on top, the affected cluster is the first row. The last 7 days, as in the requested URL.
+ */
+export const buildClusterListLink = (): string => {
+  const query = ["sidebarOpen=true", "perspective=Health", `sort=${encodeURIComponent("healthIndicators:descending;customAlerts:descending")}`, `tf=${encodeURIComponent("now-7d;now")}`].join("&");
+  return `${environment()}/ui/apps/${"dynatrace.kubernetes"}/smartscape/${"K8S_CLUSTER"}?${query}`;
+};
+
 export const buildWorkloadLink = (smartscapeWorkloadId: string, timeframe: Timeframe): string =>
   `${environment()}/ui/apps/${"dynatrace.kubernetes"}/smartscape/workload/${"K8S_WORKLOAD"}?perspective=Health&detailsId=${encodeURIComponent(smartscapeWorkloadId)}&${timeframeParam(timeframe)}`;
 

@@ -13,7 +13,7 @@ import { RefreshControl } from "../components/RefreshControl";
 import { useServiceTagOptions, useTagFilter } from "../components/SharedFilters";
 import { TagControl } from "../components/TagControl";
 import { StatusIcon } from "../components/StatusMark";
-import { buildDiskLink, buildEntityLink, buildProblemFrontendLink, buildProblemLink, buildProcessLink, buildWorkloadLink } from "../components/TileLinks";
+import { buildClusterListLink, buildDiskLink, buildEntityLink, buildProblemFrontendLink, buildProblemLink, buildProcessLink, buildWorkloadLink } from "../components/TileLinks";
 import { useBlastRadiusData, useProblemDescription, type BlastProblem, type BlastQueryKey } from "../hooks/useBlastRadiusData";
 import { paletteVars } from "../theme/colors";
 import { ANSWER_LANGUAGES, ASSIST_INTENT, DEFAULT_ANSWER_LANGUAGE, answerLanguage, explainPrompt, followUpPrompt, type AnswerLanguage } from "../assistPrompt";
@@ -294,6 +294,7 @@ export const BlastRadius = () => {
     if (type === "HOST") return buildEntityLink("infrastructure", id, timeframe);
     if (type === "PROCESS_GROUP_INSTANCE") return buildProcessLink(id, timeframe);
     if (type === "DISK") return selected ? buildDiskLink(id, selected) : null;
+    if (type === "KUBERNETES_CLUSTER") return buildClusterListLink();
     if (type === "CLOUD_APPLICATION") {
       const workload = workloadIds.get(id);
       return workload ? buildWorkloadLink(workload, timeframe) : null;
