@@ -146,6 +146,28 @@ export const buildProcessLink = (processGroupInstanceId: string, timeframe: Time
   return `${environment()}/ui/apps/${"dynatrace.infraops"}/smartscape/Compute/Processes?${timeframeParam(timeframe)}&fullPageId=${encodeURIComponent(`PROCESS-${hex}`)}`;
 };
 
+/**
+ * A disk in Infrastructure & Operations, through the app's own view_disk intent - the form the Problems
+ * app's "View disk" uses on isb54165: the app's intent route with the payload as JSON in the hash. The
+ * explorer has no list page a disk id can select, which is why disks had no link before.
+ * The window is the problem's: from its start, to its end, or now() while it is open.
+ */
+export const buildDiskLink = (diskId: string, problem: { start: string; end: string; active: boolean; eventId: string }): string | null => {
+  if (!/^DISK-[0-9A-F]+$/.test(diskId)) return null;
+  const iso = (value: string) => {
+    const time = Date.parse(value);
+    return Number.isFinite(time) ? new Date(time).toISOString() : null;
+  };
+  const from = iso(problem.start);
+  const to = problem.active ? "now()" : iso(problem.end);
+  const payload = {
+    meId: diskId,
+    ...(problem.eventId ? { "dt.problem": { "event.id": problem.eventId } } : {}),
+    ...(from && to ? { "dt.timeframe": { from, to } } : {}),
+  };
+  return `${environment()}/ui/apps/${"dynatrace.infraops"}/intent/${"view_disk"}#${encodeURIComponent(JSON.stringify(payload))}`;
+};
+
 export const buildWorkloadLink = (smartscapeWorkloadId: string, timeframe: Timeframe): string =>
   `${environment()}/ui/apps/${"dynatrace.kubernetes"}/smartscape/workload/${"K8S_WORKLOAD"}?perspective=Health&detailsId=${encodeURIComponent(smartscapeWorkloadId)}&${timeframeParam(timeframe)}`;
 
