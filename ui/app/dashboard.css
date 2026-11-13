@@ -209,6 +209,9 @@
 .blast-actions { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
 .blast-analysis-heading { flex-wrap: wrap; display: flex; align-items: center; justify-content: space-between; gap: 8px; width: 100%; color: var(--dashboard-muted); font-size: 12px; }
 .blast-heading-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+/* The Sheet scrolls its title row away with a long report, so the report scrolls on its own and the
+   title and the close button stay put. The Sheet gives this box the height left under the title. */
+.blast-agent-scroll { height: 100%; overflow-y: auto; overscroll-behavior: contain; }
 .blast-agent-expanded { max-width: 860px; font-size: 14px; line-height: 1.6; }
 /* SRE agent analysis: run time and trigger above the answer. */
 .blast-agent-hint { padding: 6px 8px; border-left: 3px solid #d97706; background: rgb(217 119 6 / 8%); color: var(--dashboard-ink) !important; }

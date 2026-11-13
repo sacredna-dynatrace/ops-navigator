@@ -354,7 +354,7 @@ export const BlastRadius = () => {
       </div>
     </section>
     <Sheet title="SRE agent 분석" show={agentExpanded} onDismiss={() => setAgentExpanded(false)} actions={<Button onClick={() => setAgentExpanded(false)}>닫기</Button>}>
-      <div className="blast-agent-expanded"><AgentAnalysis analysis={agent.state} missing={onDemandMissing} /></div>
+      <div className="blast-agent-scroll"><div className="blast-agent-expanded"><AgentAnalysis analysis={agent.state} missing={onDemandMissing} /></div></div>
     </Sheet>
     <AutoAnalysisSheet show={settingsOpen} onClose={() => setSettingsOpen(false)} status={analyzeWorkflows.status} onReload={() => void analyzeWorkflows.reload()} />
     {errors.length > 0 && <div className="query-message query-error" role="alert"><div className="query-error-list"><strong>{errors.length} of the page’s queries failed.</strong>{errors.map((item) => <span key={item.label}><b>{item.label}:</b> {item.message}</span>)}</div></div>}
