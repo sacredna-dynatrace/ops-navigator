@@ -1,6 +1,6 @@
 import { getEnvironmentUrl } from "@dynatrace-sdk/app-environment";
 import { getLanguage, getRegionalFormat } from "@dynatrace-sdk/user-preferences";
-import { explainPrompt as buildPrompt, type AnalysisProblem, type LogScope } from "./problemAnalysis";
+import { answerLanguageLine, explainPrompt as buildPrompt, type AnalysisProblem, type LogScope } from "./problemAnalysis";
 
 export type { LogScope } from "./problemAnalysis";
 
@@ -114,7 +114,7 @@ export const followUpPrompt = (problem: AnalysisProblem, report: string, languag
     `The built-in SRE agent has already analyzed it; its full report is the problem's annotation "Analyze problem (SRE agent)". Its verdict: ${agentVerdict(report)}`,
     "Do not redo the analysis. I will ask follow-up questions about it: for each, query only what that question needs, in the problem's window, and say plainly where the data disagrees with the verdict.",
     zone ? `Give times in ${zone} with the zone label; query results are UTC, so convert them first.` : "",
-    language ? `Answer in ${language}.` : "",
+    answerLanguageLine(language),
     "My question:",
   ].filter(Boolean).join("\n");
 };

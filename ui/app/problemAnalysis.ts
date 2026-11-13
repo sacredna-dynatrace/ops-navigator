@@ -298,6 +298,18 @@ export const linkifyEntities = (text: string, environmentUrl: string): string =>
   }).join("");
 };
 
+/**
+ * The answer-language line shared by every prompt. Korean answers came back in plain style (한다체:
+ * "확인해야 한다", "필요하다") in Assist and SRE agent reports alike, which reads as curt in a report
+ * handed to an operator; "Answer in Korean." says nothing about register, so the line asks for the
+ * polite formal style everywhere - list items included, where the plain style showed up most.
+ */
+export const answerLanguageLine = (language: string | null): string => {
+  if (!language) return "";
+  if (language !== "Korean") return `Answer in ${language}.`;
+  return "Answer in Korean, in the polite formal style (합니다/습니다체) throughout: every sentence, list item and table cell ends like '확인합니다', '필요합니다', '권장합니다'. Never use the plain style (한다/이다체) such as '확인해야 한다', '필요하다', '권장한다'. Short noun-phrase headings and labels may stay as they are.";
+};
+
 export const explainPrompt = (problem: AnalysisProblem, language: string | null, scope: LogScope, zone: string | null, environmentUrl: string | null = null): string => {
   const start = Date.parse(problem.start);
   const end = Date.parse(problem.end);
@@ -386,6 +398,6 @@ export const explainPrompt = (problem: AnalysisProblem, language: string | null,
     // Assist wrote "03:25 KST" for 03:25 UTC (12:25 KST) in its verdict and labelled UTC log times as
     // KST (P-2611156). DQL returns UTC, so the conversion has to be asked for explicitly.
     zone ? `Give every time in ${zone}${offset ? ` (${offset})` : ""} with its zone label, including times of day in prose such as a daily pattern. Query results are in UTC: convert each one before labelling it${offset ? ` (add ${offset.replace("UTC", "")})` : ""}, and never put the ${zone} label on a UTC value.` : "",
-    language ? `Answer in ${language}.` : "",
+    answerLanguageLine(language),
   ].filter(Boolean).join("\n");
 };
