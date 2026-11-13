@@ -146,24 +146,37 @@ export const buildProcessLink = (processGroupInstanceId: string, timeframe: Time
   return `${environment()}/ui/apps/${"dynatrace.infraops"}/smartscape/Compute/Processes?${timeframeParam(timeframe)}&fullPageId=${encodeURIComponent(`PROCESS-${hex}`)}`;
 };
 
+type ProblemWindow = { start: string; end: string; active: boolean };
+
+/** Margin on each side of a problem, so a link shows the lead-up and the recovery, not just the problem. */
+const PROBLEM_MARGIN_MS = 30 * 60_000;
+
+/**
+ * A problem's window with the margin, as ISO timestamps. An open problem ends at the moment of the
+ * click, and a closed one never runs past it. Null when the problem has no parseable start.
+ */
+const problemWindow = (problem: ProblemWindow): { from: string; to: string } | null => {
+  const start = Date.parse(problem.start);
+  if (!Number.isFinite(start)) return null;
+  const now = Date.now();
+  const end = Date.parse(problem.end);
+  const to = problem.active || !Number.isFinite(end) ? now : Math.min(end + PROBLEM_MARGIN_MS, now);
+  return { from: new Date(start - PROBLEM_MARGIN_MS).toISOString(), to: new Date(to).toISOString() };
+};
+
 /**
  * A disk in Infrastructure & Operations, through the app's own view_disk intent - the form the Problems
  * app's "View disk" uses on isb54165: the app's intent route with the payload as JSON in the hash. The
  * explorer has no list page a disk id can select, which is why disks had no link before.
- * The window is the problem's: from its start, to its end, or now() while it is open.
+ * The window is the problem's with the margin; an open problem runs to now(), as the Problems app sends it.
  */
-export const buildDiskLink = (diskId: string, problem: { start: string; end: string; active: boolean; eventId: string }): string | null => {
+export const buildDiskLink = (diskId: string, problem: ProblemWindow & { eventId: string }): string | null => {
   if (!/^DISK-[0-9A-F]+$/.test(diskId)) return null;
-  const iso = (value: string) => {
-    const time = Date.parse(value);
-    return Number.isFinite(time) ? new Date(time).toISOString() : null;
-  };
-  const from = iso(problem.start);
-  const to = problem.active ? "now()" : iso(problem.end);
+  const window = problemWindow(problem);
   const payload = {
     meId: diskId,
     ...(problem.eventId ? { "dt.problem": { "event.id": problem.eventId } } : {}),
-    ...(from && to ? { "dt.timeframe": { from, to } } : {}),
+    ...(window ? { "dt.timeframe": { from: window.from, to: problem.active ? "now()" : window.to } } : {}),
   };
   return `${environment()}/ui/apps/${"dynatrace.infraops"}/intent/${"view_disk"}#${encodeURIComponent(JSON.stringify(payload))}`;
 };
@@ -172,10 +185,14 @@ export const buildDiskLink = (diskId: string, problem: { start: string; end: str
  * Kubernetes clusters in the Kubernetes app, sorted unhealthy first - the view the user asked for on
  * isb54165. It is the cluster list, not one cluster: a problem carries the classic
  * KUBERNETES_CLUSTER- id, and the app selects by Smartscape id, which the page does not have. With the
- * worst health on top, the affected cluster is the first row. The last 7 days, as in the requested URL.
+ * worst health on top, the affected cluster is the first row.
+ * The window is the problem's with the margin. Both ends are absolute: a tf half absolute and half
+ * relative (ISO;now) makes these apps fall back to two hours (see `bounds`).
  */
-export const buildClusterListLink = (): string => {
-  const query = ["sidebarOpen=true", "perspective=Health", `sort=${encodeURIComponent("healthIndicators:descending;customAlerts:descending")}`, `tf=${encodeURIComponent("now-7d;now")}`].join("&");
+export const buildClusterListLink = (problem: ProblemWindow): string => {
+  const window = problemWindow(problem);
+  const tf = window ? `${window.from};${window.to}` : "now-7d;now";
+  const query = ["sidebarOpen=true", "perspective=Health", `sort=${encodeURIComponent("healthIndicators:descending;customAlerts:descending")}`, `tf=${encodeURIComponent(tf)}`].join("&");
   return `${environment()}/ui/apps/${"dynatrace.kubernetes"}/smartscape/${"K8S_CLUSTER"}?${query}`;
 };
 

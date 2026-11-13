@@ -294,7 +294,7 @@ export const BlastRadius = () => {
     if (type === "HOST") return buildEntityLink("infrastructure", id, timeframe);
     if (type === "PROCESS_GROUP_INSTANCE") return buildProcessLink(id, timeframe);
     if (type === "DISK") return selected ? buildDiskLink(id, selected) : null;
-    if (type === "KUBERNETES_CLUSTER") return buildClusterListLink();
+    if (type === "KUBERNETES_CLUSTER") return selected ? buildClusterListLink(selected) : null;
     if (type === "CLOUD_APPLICATION") {
       const workload = workloadIds.get(id);
       return workload ? buildWorkloadLink(workload, timeframe) : null;
