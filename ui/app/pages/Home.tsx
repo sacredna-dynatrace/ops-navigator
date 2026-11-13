@@ -21,7 +21,7 @@ import { useNodeForecast, FORECAST_HORIZON_HOURS } from "../hooks/useNodeForecas
 // Read from the manifest at runtime so the badge cannot drift from app.config.json.
 
 /** Forecast values are plain numbers, so they are formatted here rather than through a node. */
-const formatForecast = (value: number, unit: string) => `${value >= 100 ? Math.round(value) : Number(value.toFixed(2))} ${unit}`;
+const formatForecast = (value: number, unit: string) => `${value.toLocaleString("en-US", { maximumFractionDigits: value >= 100 ? 0 : 2 })} ${unit}`;
 
 const QUERY_LABELS: Record<TopologyQueryKey, string> = {
   rum: "RUM applications",

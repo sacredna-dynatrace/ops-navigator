@@ -149,7 +149,11 @@ const SECONDARY_UNITS = new Set(["B/s"]);
 const unitRank = (node: TopologyNode) => SECONDARY_UNITS.has(node.unit) ? 1 : 0;
 
 /** Keeps low-traffic entities legible: 0.01 req/min must not round away to 0.0. */
-const formatNumber = (value: number) => value >= 100 ? value.toFixed(0) : value >= 10 ? value.toFixed(1) : value.toFixed(2);
+/** Thousands are grouped ("12,345 req/min") so a large rate reads at a glance. */
+const formatNumber = (value: number) => {
+  const digits = value >= 100 ? 0 : value >= 10 ? 1 : 2;
+  return value.toLocaleString("en-US", { minimumFractionDigits: digits, maximumFractionDigits: digits });
+};
 
 const THROUGHPUT_UNITS = ["B/s", "KB/s", "MB/s", "GB/s"];
 /** Byte rates span too many orders of magnitude for a fixed unit, so step up as needed. */
@@ -164,8 +168,8 @@ export const formatThroughput = (bytesPerSecond: number) => {
 const formatValue = (value: number, unit: string) => {
   if (unit === "B/s") return formatThroughput(value);
   if (unit === "containers") return value > 0 ? `${value} container${value === 1 ? "" : "s"}` : "— containers";
-  if (unit === "pods") return `${value} pod${value === 1 ? "" : "s"}`;
-  if (unit === "processes") return `${value} process${value === 1 ? "" : "es"}`;
+  if (unit === "pods") return `${value.toLocaleString("en-US")} pod${value === 1 ? "" : "s"}`;
+  if (unit === "processes") return `${value.toLocaleString("en-US")} process${value === 1 ? "" : "es"}`;
   return `${formatNumber(value)} ${unit}`;
 };
 export const formatNodeValue = (node: TopologyNode) => formatValue(node.value, node.unit);
