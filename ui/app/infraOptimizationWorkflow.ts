@@ -377,13 +377,14 @@ const query = (name: InfraQueryName, domain: InfraDomain, position: { x: number;
 });
 
 /**
- * The action's field limits: prompt 5,000 characters, instructions 2,500, additional context 20,000.
- * With auto-trim on, a longer field is cut without an error - v7 to v13 sent 3,853 to 4,437 characters
- * of instructions, so part of the data rules likely never reached the AI. The data rules therefore
- * go in the prompt, the instructions keep the language line and a few lines, and building the
- * template fails when either field is over its limit.
+ * The action's field limits, as the Workflows editor states them (2026-11-15): prompt 10,000
+ * characters, instructions 2,500, additional context 100,000 - the documentation's 5,000 and 20,000
+ * are older. With auto-trim on, a longer field is cut without an error - v7 to v13 sent 3,853 to
+ * 4,437 characters of instructions, so part of the data rules likely never reached the AI. The data
+ * rules therefore go in the prompt, the instructions keep the language line and a few lines, and
+ * building the template fails when either field is over its limit.
  */
-const PROMPT_LIMIT = 5000;
+const PROMPT_LIMIT = 10000;
 const INSTRUCTION_LIMIT = 2500;
 /** A field's length once the workflow renders its language expression - the longer branch. */
 const renderedLength = (text: string) =>
