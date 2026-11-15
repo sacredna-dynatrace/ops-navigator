@@ -20,6 +20,9 @@ import { answerLanguageLine } from "./problemAnalysis";
  */
 
 /**
+ * v14: the data rules move from the instructions (sent at 3,853 to 4,437 characters against a 2,500
+ * limit, auto-trimmed) into the prompt (5,000), checked when the template is built (promptInput);
+ * node counts are written as CPU and memory counts, never as a binding or limiting resource.
  * v13: the number check matches each number against values of the kind its unit names (%, mcores,
  * MiB, GiB, counts); no money amounts at all; hosts that are Kubernetes nodes are their own group;
  * host values named _percent; host total; wording rules for scheduling and memory throttling.
@@ -48,7 +51,7 @@ import { answerLanguageLine } from "./problemAnalysis";
  * to the trash (CLEANUP_TASK).
  * v2: the notebook's title names the domains it covers, and it gets a description.
  */
-export const INFRA_TEMPLATE_VERSION = 13;
+export const INFRA_TEMPLATE_VERSION = 14;
 export const INFRA_WORKFLOW_TITLE = "[Ops Navigator] Infrastructure Optimization";
 /** Finds every version, v1-v2 titled like Dynatrace's template included; the marker decides. */
 export const INFRA_WORKFLOW_SEARCH = "Infrastructure Optimization";
@@ -337,7 +340,7 @@ const DATA_RULES = [
   "Recommended values are already computed: present recommended_request_* and recommended_limit_* exactly as given, and never write a recommended number of your own. A null recommended value means keep the current setting - say 'keep' (유지), not a number. Explain each recommendation briefly from the usage, requests and limits.",
   "Where limit_below_request is true, the limit is a sum over containers some of which set no limit (0 means none set) - mention that the limit cannot be judged from the sum.",
   "Do not write any tables - not even a table of counts - and do not list the examples row by row: data tables with every finding, count and example are added under your text automatically. Write prose and short bullets that interpret the data, and name only the few items that matter most, each with its own numbers.",
-  "For a cluster, minimum_nodes is the smallest safe node count, binding_resource the resource that sets it (CPU or memory) and removable_nodes how many nodes could go - state them as given and never name the other resource as the one that sets the minimum. Explain a node count only as the requests divided by (allocatable per node x 0.85), rounded up, using cpu_allocatable_per_node_mcores or mem_allocatable_per_node_gib - usage does not set it.",
+  "For a cluster, state the node counts as given and only in this form: CPU needs nodes_needed_for_cpu nodes and memory nodes_needed_for_memory, so at least minimum_nodes are needed and removable_nodes can go. Never call a resource binding, limiting or constraining (제한/결정 리소스). A node count is the requests divided by (allocatable per node x 0.85), rounded up - usage does not set it.",
   "total_workloads is every workload, excluded_workloads those left out and analyzed_workloads those analyzed (total minus excluded, already worked out): name each as given, and never add, subtract or otherwise combine counts yourself.",
   "throttling_p95 is a relative indicator: write it as a bare number, never followed by mcores or any other unit.",
   "Usage above the requests does not stop scheduling: under contention such a workload gets less CPU, and under memory pressure it is among the first evicted. Say that, and never use the word scheduling (스케줄링).",
@@ -373,10 +376,31 @@ const query = (name: InfraQueryName, domain: InfraDomain, position: { x: number;
   conditions: { states: after ? { [after]: "ANY" } : {}, custom: `{{ ${inScope(domain)} }}`, else: "SKIP" },
 });
 
+/**
+ * The action's field limits: prompt 5,000 characters, instructions 2,500, additional context 20,000.
+ * With auto-trim on, a longer field is cut without an error - v7 to v13 sent 3,853 to 4,437 characters
+ * of instructions, so part of the data rules likely never reached the AI. The data rules therefore
+ * go in the prompt, the instructions keep the language line and a few lines, and building the
+ * template fails when either field is over its limit.
+ */
+const PROMPT_LIMIT = 5000;
+const INSTRUCTION_LIMIT = 2500;
+/** A field's length once the workflow renders its language expression - the longer branch. */
+const renderedLength = (text: string) =>
+  text.replace(/\{\{ "([^"]*)" if [^}]*? else "([^"]*)" \}\}/g, (_match, english: string, korean: string) => (english.length > korean.length ? english : korean)).length;
+const promptInput = (prompt: string, instruction: string, supplementary: string) => {
+  const promptLength = renderedLength(prompt);
+  const instructionLength = renderedLength(instruction);
+  if (promptLength > PROMPT_LIMIT || instructionLength > INSTRUCTION_LIMIT) {
+    throw new Error(`Prompt task over its limits: prompt ${promptLength}/${PROMPT_LIMIT}, instructions ${instructionLength}/${INSTRUCTION_LIMIT}`);
+  }
+  return { config: "disabled", autoTrim: true, prompt, instruction, supplementary };
+};
+
 const prompt = (domain: InfraDomain, position: { x: number; y: number }, text: string, instruction: string, supplementary: string): TaskDefinition => ({
   action: "dynatrace.davis.workflow.actions:prompt-generative-ai",
   description: `Writes the ${DOMAINS[domain].title.English.toLowerCase()} report with Dynatrace generative AI`,
-  input: { config: "disabled", autoTrim: true, prompt: text, instruction: withLanguage([instruction, DATA_RULES, FAILED_LINE].filter(Boolean).join("\n")), supplementary },
+  input: promptInput([text, DATA_RULES, FAILED_LINE].join("\n\n"), withLanguage(instruction), supplementary),
   position,
   predecessors: DOMAINS[domain].queries,
   // ANY: one failed query leaves the report to the others (see records()).
@@ -449,7 +473,7 @@ const SUMMARY_INSTRUCTION = [
   "Start directly with the first bullet - no title, no introduction. Use only facts and numbers that appear in the reports; do not add new findings, and do not repeat a recommendation a report itself marks as not advisable.",
   "Copy every number exactly as the report states it and keep it with the item it belongs to - never move a value from one workload, cluster or disk to another, never add numbers up yourself, and add no percentage or amount the report does not give.",
   "Throttling has no unit - never write mcores or any other unit for it.",
-  "For node counts, name the resource that sets the minimum exactly as the Kubernetes report does.",
+  "For node counts, write only the CPU and memory node counts and the minimum as the Kubernetes report gives them - never call a resource binding or limiting.",
 ].join("\n");
 
 const NETWORK_PROMPT = `Provide a markdown report for:
@@ -1029,7 +1053,7 @@ const taskDefinitions = (): Record<string, TaskDefinition> => ({
   [SUMMARY_TASK]: {
     action: "dynatrace.davis.workflow.actions:prompt-generative-ai",
     description: "Sums up the key actions across all reports with Dynatrace generative AI",
-    input: { config: "disabled", autoTrim: true, prompt: SUMMARY_PROMPT, instruction: withLanguage(SUMMARY_INSTRUCTION), supplementary: SUMMARY_DATA },
+    input: promptInput(SUMMARY_PROMPT, withLanguage(SUMMARY_INSTRUCTION), SUMMARY_DATA),
     position: { x: 0, y: 9 },
     predecessors: ["network_report_prompt"],
     conditions: { states: { network_report_prompt: "ANY" }, custom: `{{ ${ANY_SCOPE} }}`, else: "SKIP" },
