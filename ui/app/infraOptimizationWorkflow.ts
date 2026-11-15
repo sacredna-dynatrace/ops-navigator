@@ -5,8 +5,8 @@ import { answerLanguageLine } from "./problemAnalysis";
  * The Infrastructure Optimization Agent workflow, built from Dynatrace's template (host, disk,
  * Kubernetes and network sizing: Grail queries -> Davis generative AI -> report), with what the
  * Automation page adds:
- * - **delivery**: an email per domain (the template's only way) or one notebook with every report and
- *   the queries behind it;
+ * - **delivery**: one email with every report (the template sent one per domain) or one notebook with
+ *   every report and the queries behind it;
  * - **language**: the reports in Korean (default, polite style) or English.
  * Both live in the workflow input, so they can be changed later in the Workflows app without
  * recreating the workflow.
@@ -19,19 +19,22 @@ import { answerLanguageLine } from "./problemAnalysis";
  * No SDK imports: the page and a plain Node script (to try the template with dtctl) both build it.
  */
 
-/** v2: the notebook's title names the domains it covers, and it gets a description. */
 /**
+ * v5: one email with every report instead of one per domain; the domains chain on their reports.
  * v4: the cleanup really uses the trash (see cleanupScript); v3's script deleted for good.
  * v3: titled "[Ops Navigator] ..." - Dynatrace's own template is "Infrastructure Optimization Agent",
  * and the two could not be told apart in the Workflows app - and the first run moves older versions
  * to the trash (CLEANUP_TASK).
+ * v2: the notebook's title names the domains it covers, and it gets a description.
  */
-export const INFRA_TEMPLATE_VERSION = 4;
+export const INFRA_TEMPLATE_VERSION = 5;
 export const INFRA_WORKFLOW_TITLE = "[Ops Navigator] Infrastructure Optimization";
 /** Finds every version, v1-v2 titled like Dynatrace's template included; the marker decides. */
 export const INFRA_WORKFLOW_SEARCH = "Infrastructure Optimization";
 export const CLEANUP_TASK = "cleanup_old_versions";
 export const NOTEBOOK_TASK = "publish_notebook";
+export const COMPOSE_EMAIL_TASK = "compose_email";
+export const EMAIL_TASK = "email_report";
 /** In the notebook task's script - the intent drops a workflow description - to recognize our workflow. */
 export const INFRA_MARKER_PATTERN = /ops-navigator infra-optimization template v(\d+)/;
 const MARKER = `ops-navigator infra-optimization template v${INFRA_TEMPLATE_VERSION}`;
@@ -57,38 +60,30 @@ export const DEFAULT_INFRA_INPUT: InfraOptimizationInput = {
 };
 
 /** What each domain queries and which prompt task writes its report. */
-const DOMAINS: Record<InfraDomain, { prompt: string; email: string; queries: InfraQueryName[]; title: Record<InfraLanguage, string>; short: Record<InfraLanguage, string>; subject: Record<InfraLanguage, string> }> = {
+const DOMAINS: Record<InfraDomain, { prompt: string; queries: InfraQueryName[]; title: Record<InfraLanguage, string>; short: Record<InfraLanguage, string> }> = {
   kubernetes: {
     prompt: "k8s_report_prompt",
-    email: "email_k8s_report",
     queries: ["k8s_cluster_cpu", "k8s_cluster_memory", "k8s_workload_cpu", "k8s_workload_memory"],
     title: { Korean: "Kubernetes 최적화", English: "Kubernetes optimization" },
     short: { Korean: "K8s", English: "K8s" },
-    subject: { Korean: "Kubernetes 최적화 리포트", English: "K8s Optimization Report" },
   },
   host: {
     prompt: "host_report_prompt",
-    email: "email_host_report",
     queries: ["host_utilization"],
     title: { Korean: "호스트 최적화", English: "Host optimization" },
     short: { Korean: "호스트", English: "Host" },
-    subject: { Korean: "호스트 최적화 리포트", English: "Host Optimization Report" },
   },
   disk: {
     prompt: "disk_report_prompt",
-    email: "email_disk_report",
     queries: ["disk_overutilized", "disk_underutilized"],
     title: { Korean: "디스크 최적화", English: "Disk optimization" },
     short: { Korean: "디스크", English: "Disk" },
-    subject: { Korean: "디스크 최적화 리포트", English: "Disk Optimization Report" },
   },
   network: {
     prompt: "network_report_prompt",
-    email: "email_network_report",
     queries: ["network_saturated_interfaces", "network_updown_interfaces"],
     title: { Korean: "네트워크 최적화", English: "Network optimization" },
     short: { Korean: "네트워크", English: "Network" },
-    subject: { Korean: "네트워크 최적화 리포트", English: "Network Optimization Report" },
   },
 };
 
@@ -130,7 +125,7 @@ const withLanguage = (instruction: string) => (instruction ? `${instruction}\n${
  * the prompt got "bad=QUERY_FAILED; good=[]" and the run ended SUCCESS.
  */
 export const QUERY_FAILED = "QUERY_FAILED";
-const records = (task: string, json = false) => `{{ result("${task}")["records"] | default("${QUERY_FAILED}")${json ? " | to_json()" : ""} }}`;
+const records = (task: string) => `{{ result("${task}")["records"] | default("${QUERY_FAILED}") }}`;
 /** Tells the AI what QUERY_FAILED means, so it reports the gap instead of inventing findings. */
 const FAILED_LINE = `A data set given as ${QUERY_FAILED} could not be collected - its query failed, typically because that data source is not monitored in this environment. Say so briefly for that part, and do not invent findings for it.`;
 
@@ -170,29 +165,14 @@ const prompt = (domain: InfraDomain, position: { x: number; y: number }, text: s
   retry: PROMPT_RETRY,
 });
 
-const email = (domain: InfraDomain, position: { x: number; y: number }, extra = ""): TaskDefinition => ({
-  action: "dynatrace.email:send-email",
-  description: `Emails the ${DOMAINS[domain].title.English.toLowerCase()} report (delivery: email)`,
-  input: {
-    to: ['{{ input()["emails"]["to"] }}'],
-    cc: ['{{ input()["emails"]["cc"] }}'],
-    bcc: ['{{ input()["emails"]["bcc"] }}'],
-    subject: byLanguage(DOMAINS[domain].subject.Korean, DOMAINS[domain].subject.English),
-    content: `${byLanguage("AI 생성 리포트:", "AI generated report:")}\n{{ result("${DOMAINS[domain].prompt}")["text"] }}${extra}`,
-  },
-  position,
-  predecessors: [DOMAINS[domain].prompt],
-  conditions: { states: { [DOMAINS[domain].prompt]: "OK" }, custom: `{{ ${inScope(domain)} and ${BY_EMAIL} }}`, else: "SKIP" },
-});
-
-const K8S_DATA = (json: boolean) => `{
+const K8S_DATA = `{
   "Cluster optimization": {
-    "CPU": ${records("k8s_cluster_cpu", json)},
-    "Memory": ${records("k8s_cluster_memory", json)}
+    "CPU": ${records("k8s_cluster_cpu")},
+    "Memory": ${records("k8s_cluster_memory")}
   },
   "Workload optimization": {
-    "CPU": ${records("k8s_workload_cpu", json)},
-    "Memory": ${records("k8s_workload_memory", json)}
+    "CPU": ${records("k8s_workload_cpu")},
+    "Memory": ${records("k8s_workload_memory")}
   }
 }`;
 
@@ -249,8 +229,12 @@ Saturated interfaces could cause network slowdowns and require either upgrades o
 ## Identify up/down interfaces
 Network admininstrators refer to interfaces as "up/down", when the administrative status is "up" but the operational status is "down". Sometimes this is normal, e.g. a port for a user's computer is down; however, many times this can also mean that a port that is intended to be up is for some reason down, perhaps due to a cable or NIC issue.`;
 
-/** The notebook: title and scope, each report, then the queries behind it to rerun. */
-const notebookScript = () => {
+/**
+ * The part the notebook and the email share: the run's input, the time, and each in-scope domain's
+ * report read back from its prompt task (empty when the task was skipped or failed). Both deliveries
+ * then name the same domains in their title or subject.
+ */
+const collectReports = () => {
   const domains = INFRA_DOMAINS.map((domain) => ({
     domain,
     task: DOMAINS[domain].prompt,
@@ -258,13 +242,7 @@ const notebookScript = () => {
     short: DOMAINS[domain].short,
     queries: DOMAINS[domain].queries.map((name) => ({ title: QUERY_TITLES[name], query: INFRA_QUERIES[name] })),
   }));
-  return `// ${MARKER}
-import { executionsClient } from "@dynatrace-sdk/client-automation";
-import { documentsClient } from "@dynatrace-sdk/client-document";
-import { getEnvironmentUrl } from "@dynatrace-sdk/app-environment";
-
-// One notebook with every report of this run and the queries behind it (delivery: notebook).
-const DOMAINS = ${JSON.stringify(domains, null, 2)};
+  return `const DOMAINS = ${JSON.stringify(domains, null, 2)};
 
 const TEXT = {
   Korean: {
@@ -277,8 +255,10 @@ const TEXT = {
     createdAt: "생성 시각",
     scope: "분석 범위",
     missing: "_이 영역의 리포트가 생성되지 않았습니다._",
+    missingList: "리포트를 받지 못한 영역",
     data: "원본 데이터 쿼리",
     footer: "Ops Navigator의 Infrastructure Optimization 워크플로가 생성했습니다. 리포트는 Dynatrace 생성형 AI가 작성했으며, 아래 쿼리로 원본 데이터를 다시 확인할 수 있습니다.",
+    mailFooter: "Ops Navigator의 Infrastructure Optimization 워크플로가 보낸 메일입니다. 리포트는 Dynatrace 생성형 AI가 작성했습니다. 원본 데이터는 결과 전달을 노트북으로 바꿔 실행하거나, Workflows 앱의 실행 기록에서 각 쿼리 태스크의 결과로 확인할 수 있습니다.",
   },
   English: {
     name: "[Infra Optimization] ",
@@ -290,21 +270,19 @@ const TEXT = {
     createdAt: "Created",
     scope: "Scope",
     missing: "_No report was produced for this domain._",
+    missingList: "No report for",
     data: "Raw data queries",
     footer: "Created by the Infrastructure Optimization workflow of Ops Navigator. The reports are written by Dynatrace generative AI; the queries below show the data behind them.",
+    mailFooter: "Sent by the Infrastructure Optimization workflow of Ops Navigator. The reports are written by Dynatrace generative AI. For the raw data, run with notebook delivery, or open the run in the Workflows app and look at each query task's result.",
   },
 };
 
-// Section ids only need to be unique within the notebook.
-let sectionCount = 0;
-const newId = () => "section-" + String(++sectionCount);
-const markdown = (text) => ({ id: newId(), type: "markdown", markdown: text });
 // Assist appends this to non-English answers ("Dynatrace Assist는 공식적으로 영어로만 지원되며 ...").
 const LANGUAGE_NOTE = /^.*(영어로만 지원|only (officially )?supported in English).*$/gm;
-const tidy = (report) => report.replace(LANGUAGE_NOTE, "").trim();
-const dql = (title, query) => ({ id: newId(), type: "dql", title, showTitle: true, state: { input: { value: query, timeframe: { from: "now()-2h", to: "now()" } } } });
+// Removing it can leave blank lines and a rule right under the title ("# ...\\n\\n\\n\\n---"); both go.
+const tidy = (report) => report.replace(LANGUAGE_NOTE, "").replace(/\\n{3,}/g, "\\n\\n").replace(/^(#{1,6} [^\\n]*)\\n+---[ \\t]*\\n+/m, "$1\\n\\n").trim();
 
-export default async function ({ execution_id }) {
+async function collect(execution_id) {
   const execution = await executionsClient.getExecution({ id: execution_id });
   const input = execution.input ?? {};
   const language = input.language === "English" ? "English" : "Korean";
@@ -326,7 +304,36 @@ export default async function ({ execution_id }) {
     reports.push({ entry, report });
   }
 
-  const sections = [markdown(text.heading + "\\n\\n**" + text.createdAt + ":** " + stamp + "  \\n**" + text.scope + ":** " + covered.map((entry) => entry.title[language]).join(", ") + "\\n\\n" + text.footer)];
+  // Titles and subjects name the domains that produced a report ("All" for all four): a list of
+  // notebooks or mails shows nothing else.
+  const produced = reports.filter((item) => item.report).map((item) => item.entry);
+  const label = produced.length === DOMAINS.length ? text.all : produced.length > 0 ? produced.map((entry) => entry.short[language]).join("·") : text.none;
+  const title = text.name + label + " · " + stamp;
+  const missing = reports.filter((item) => !item.report).map((item) => item.entry.title[language]);
+  const scopeLine = covered.map((entry) => entry.title[language]).join(", ");
+  return { language, text, stamp, covered, reports, title, missing, scopeLine };
+}
+`;
+};
+
+/** The notebook: title and scope, each report, then the queries behind it to rerun. */
+const notebookScript = () => `// ${MARKER}
+import { executionsClient } from "@dynatrace-sdk/client-automation";
+import { documentsClient } from "@dynatrace-sdk/client-document";
+import { getEnvironmentUrl } from "@dynatrace-sdk/app-environment";
+
+// One notebook with every report of this run and the queries behind it (delivery: notebook).
+${collectReports()}
+// Section ids only need to be unique within the notebook.
+let sectionCount = 0;
+const newId = () => "section-" + String(++sectionCount);
+const markdown = (text) => ({ id: newId(), type: "markdown", markdown: text });
+const dql = (title, query) => ({ id: newId(), type: "dql", title, showTitle: true, state: { input: { value: query, timeframe: { from: "now()-2h", to: "now()" } } } });
+
+export default async function ({ execution_id }) {
+  const { language, text, stamp, reports, title, missing, scopeLine } = await collect(execution_id);
+
+  const sections = [markdown(text.heading + "\\n\\n**" + text.createdAt + ":** " + stamp + "  \\n**" + text.scope + ":** " + scopeLine + "\\n\\n" + text.footer)];
   for (const { entry, report } of reports) {
     // The report brings its own title; the domain heading is only for a missing one.
     sections.push(markdown(report ? report : "## " + entry.title[language] + "\\n\\n" + text.missing));
@@ -334,22 +341,37 @@ export default async function ({ execution_id }) {
     for (const item of entry.queries) sections.push(dql(item.title[language], item.query));
   }
 
-  // Notebooks lists show only titles, so the title names the domains that produced a report ("All"
-  // for all four). The description repeats scope and time in a fixed form.
-  const produced = reports.filter((item) => item.report).map((item) => item.entry);
-  const label = produced.length === DOMAINS.length ? text.all : produced.length > 0 ? produced.map((entry) => entry.short[language]).join("·") : text.none;
-  const name = text.name + label + " · " + stamp;
-  const missing = reports.filter((item) => !item.report).map((item) => item.entry.short[language]);
-  const description = text.scope + ": " + covered.map((entry) => entry.title[language]).join(", ") + (missing.length > 0 ? " (" + text.none + ": " + missing.join(", ") + ")" : "") + " · " + text.created + ": " + stamp + " · " + text.by;
+  const description = text.scope + ": " + scopeLine + (missing.length > 0 ? " (" + text.none + ": " + missing.join(", ") + ")" : "") + " · " + text.created + ": " + stamp + " · " + text.by;
   const content = { version: "7", defaultTimeframe: { from: "now()-2h", to: "now()" }, sections };
   const document = await documentsClient.createDocument({
-    body: { name, description, type: "notebook", content: new Blob([JSON.stringify(content)], { type: "application/json" }) },
+    body: { name: title, description, type: "notebook", content: new Blob([JSON.stringify(content)], { type: "application/json" }) },
   });
   const url = getEnvironmentUrl().replace(/\\/$/, "") + "/ui/apps/dynatrace.notebooks/notebook/" + document.id;
-  return { notebookId: document.id, name, url };
+  return { notebookId: document.id, name: title, url };
 }
 `;
-};
+
+/**
+ * The one email (delivery: email): every report of the run in a single markdown body, with the same
+ * title the notebook would get as its subject. Raw data stays out - it made the template's Kubernetes
+ * mail long and unreadable; the footer says where to find it.
+ */
+const composeEmailScript = () => `// ${MARKER}
+import { executionsClient } from "@dynatrace-sdk/client-automation";
+
+${collectReports()}
+export default async function ({ execution_id }) {
+  const { language, text, stamp, reports, title, missing, scopeLine } = await collect(execution_id);
+  const parts = [text.heading, "**" + text.createdAt + ":** " + stamp + "  \\n**" + text.scope + ":** " + scopeLine + (missing.length > 0 ? "  \\n**" + text.missingList + ":** " + missing.join(", ") : "")];
+  for (const { entry, report } of reports) {
+    parts.push("---");
+    parts.push(report ? report : "## " + entry.title[language] + "\\n\\n" + text.missing);
+  }
+  parts.push("---");
+  parts.push("_" + text.mailFooter + "_");
+  return { subject: title, body: parts.join("\\n\\n") };
+}
+`;
 
 /**
  * Moves this template's older versions to the Workflows trash. Only workflows whose notebook task
@@ -424,29 +446,48 @@ const taskDefinitions = (): Record<string, TaskDefinition> => ({
   k8s_cluster_memory: query("k8s_cluster_memory", "kubernetes", { x: -1, y: 1 }),
   k8s_workload_cpu: query("k8s_workload_cpu", "kubernetes", { x: 1, y: 1 }),
   k8s_workload_memory: query("k8s_workload_memory", "kubernetes", { x: 2, y: 1 }),
-  k8s_report_prompt: prompt("kubernetes", { x: 0, y: 2 }, K8S_PROMPT, K8S_INSTRUCTION, K8S_DATA(false)),
-  email_k8s_report: email("kubernetes", { x: 0, y: 3 }, `\n\n-----\n\n# Raw data\n\`\`\`json\n${K8S_DATA(true)}\n\`\`\``),
-  // The domains run one after another, as in the template: each waits for the one before (a skipped
-  // task counts as OK, so a domain out of scope does not hold the next one back).
-  host_utilization: query("host_utilization", "host", { x: -1, y: 4 }, "email_k8s_report"),
-  host_report_prompt: prompt("host", { x: 0, y: 5 }, HOST_PROMPT, "Instead of bulleted list, format example hosts in a table.", `Use this analysis of p90 CPU and Memory for the past 30 days:\n${records("host_utilization")}`),
-  email_host_report: email("host", { x: 0, y: 6 }),
-  disk_overutilized: query("disk_overutilized", "disk", { x: -1, y: 7 }, "email_host_report"),
-  disk_underutilized: query("disk_underutilized", "disk", { x: 0, y: 7 }, "email_host_report"),
-  disk_report_prompt: prompt("disk", { x: 0, y: 8 }, DISK_PROMPT, "", `{\n  "Overutilized disks": ${records("disk_overutilized")},\n  "Underutilized disks": ${records("disk_underutilized")}\n}`),
-  email_disk_report: email("disk", { x: 0, y: 9 }),
-  network_updown_interfaces: query("network_updown_interfaces", "network", { x: -1, y: 10 }, "email_disk_report"),
-  network_saturated_interfaces: query("network_saturated_interfaces", "network", { x: 0, y: 10 }, "email_disk_report"),
-  network_report_prompt: prompt("network", { x: 0, y: 11 }, NETWORK_PROMPT, "", `{\n  "Saturated interfaces": ${records("network_saturated_interfaces")},\n  "Up/Down interfaces": ${records("network_updown_interfaces")}\n}`),
-  email_network_report: email("network", { x: 0, y: 12 }),
+  k8s_report_prompt: prompt("kubernetes", { x: 0, y: 2 }, K8S_PROMPT, K8S_INSTRUCTION, K8S_DATA),
+  // The domains run one after another, as in the template, so the AI calls do not all land at once:
+  // each waits for the report before it (ANY - a skipped or failed one does not hold the next back).
+  host_utilization: query("host_utilization", "host", { x: -1, y: 3 }, "k8s_report_prompt"),
+  host_report_prompt: prompt("host", { x: 0, y: 4 }, HOST_PROMPT, "Instead of bulleted list, format example hosts in a table.", `Use this analysis of p90 CPU and Memory for the past 30 days:\n${records("host_utilization")}`),
+  disk_overutilized: query("disk_overutilized", "disk", { x: -1, y: 5 }, "host_report_prompt"),
+  disk_underutilized: query("disk_underutilized", "disk", { x: 0, y: 5 }, "host_report_prompt"),
+  disk_report_prompt: prompt("disk", { x: 0, y: 6 }, DISK_PROMPT, "", `{\n  "Overutilized disks": ${records("disk_overutilized")},\n  "Underutilized disks": ${records("disk_underutilized")}\n}`),
+  network_updown_interfaces: query("network_updown_interfaces", "network", { x: -1, y: 7 }, "disk_report_prompt"),
+  network_saturated_interfaces: query("network_saturated_interfaces", "network", { x: 0, y: 7 }, "disk_report_prompt"),
+  network_report_prompt: prompt("network", { x: 0, y: 8 }, NETWORK_PROMPT, "", `{\n  "Saturated interfaces": ${records("network_saturated_interfaces")},\n  "Up/Down interfaces": ${records("network_updown_interfaces")}\n}`),
+  // Delivery: one email or one notebook with every report, after the last domain (ANY - the reports
+  // that did come out go out when a later domain failed).
+  [COMPOSE_EMAIL_TASK]: {
+    action: "dynatrace.automations:run-javascript",
+    description: "Puts every report of the run into one email body (delivery: email)",
+    input: { script: composeEmailScript() },
+    position: { x: 0, y: 9 },
+    predecessors: ["network_report_prompt"],
+    conditions: { states: { network_report_prompt: "ANY" }, custom: `{{ ${BY_EMAIL} }}`, else: "SKIP" },
+  },
+  [EMAIL_TASK]: {
+    action: "dynatrace.email:send-email",
+    description: "Sends the one report email (delivery: email)",
+    input: {
+      to: ['{{ input()["emails"]["to"] }}'],
+      cc: ['{{ input()["emails"]["cc"] }}'],
+      bcc: ['{{ input()["emails"]["bcc"] }}'],
+      subject: `{{ result("${COMPOSE_EMAIL_TASK}")["subject"] }}`,
+      content: `{{ result("${COMPOSE_EMAIL_TASK}")["body"] }}`,
+    },
+    position: { x: 0, y: 10 },
+    predecessors: [COMPOSE_EMAIL_TASK],
+    conditions: { states: { [COMPOSE_EMAIL_TASK]: "OK" }, custom: `{{ ${BY_EMAIL} }}`, else: "SKIP" },
+  },
   [NOTEBOOK_TASK]: {
     action: "dynatrace.automations:run-javascript",
     description: "Saves every report of the run, with its queries, as one notebook (delivery: notebook)",
     input: { script: notebookScript() },
-    position: { x: 0, y: 13 },
-    predecessors: ["email_network_report"],
-    // ANY: the notebook keeps the reports that did come out when a later domain failed.
-    conditions: { states: { email_network_report: "ANY" }, custom: `{{ input()["delivery"] == "notebook" }}`, else: "SKIP" },
+    position: { x: 1, y: 9 },
+    predecessors: ["network_report_prompt"],
+    conditions: { states: { network_report_prompt: "ANY" }, custom: `{{ input()["delivery"] == "notebook" }}`, else: "SKIP" },
   },
 });
 

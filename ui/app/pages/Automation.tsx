@@ -180,7 +180,7 @@ const InfraOptimizationCard = () => {
           </ToggleButtonGroup>
           <p className="automation-note">
             {delivery === "email"
-              ? "영역마다 리포트 메일을 한 통씩 보냅니다 (Kubernetes 메일에는 원본 데이터 포함)."
+              ? "실행할 때마다 모든 리포트를 하나로 묶은 메일 한 통을 보냅니다. 제목에 분석 범위가 들어갑니다."
               : "실행할 때마다 모든 리포트와 원본 데이터 쿼리를 담은 노트북 하나를 workflow 실행자 이름으로 만듭니다. 제목에 분석 범위가 들어갑니다."}
           </p>
         </FormField>
