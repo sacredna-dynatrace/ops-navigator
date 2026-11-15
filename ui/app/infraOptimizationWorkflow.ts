@@ -20,6 +20,9 @@ import { answerLanguageLine } from "./problemAnalysis";
  */
 
 /**
+ * v15: one node finding per cluster (no memory-only scale-down), host groups with their ranges and
+ * Kubernetes nodes per cluster, a new k8s_rightsizing query (requests and nodes after rightsizing,
+ * and how much of the requests the advice covers), and fixed wording for workload counts.
  * v14: the data rules move from the instructions (sent at 3,853 to 4,437 characters against a 2,500
  * limit, auto-trimmed) into the prompt (5,000), checked when the template is built (promptInput);
  * node counts are written as CPU and memory counts, never as a binding or limiting resource.
@@ -51,7 +54,7 @@ import { answerLanguageLine } from "./problemAnalysis";
  * to the trash (CLEANUP_TASK).
  * v2: the notebook's title names the domains it covers, and it gets a description.
  */
-export const INFRA_TEMPLATE_VERSION = 14;
+export const INFRA_TEMPLATE_VERSION = 15;
 export const INFRA_WORKFLOW_TITLE = "[Ops Navigator] Infrastructure Optimization";
 /** Finds every version, v1-v2 titled like Dynatrace's template included; the marker decides. */
 export const INFRA_WORKFLOW_SEARCH = "Infrastructure Optimization";
@@ -89,7 +92,7 @@ export const DEFAULT_INFRA_INPUT: InfraOptimizationInput = {
 const DOMAINS: Record<InfraDomain, { prompt: string; queries: InfraQueryName[]; title: Record<InfraLanguage, string>; short: Record<InfraLanguage, string>; period: Record<InfraLanguage, string> }> = {
   kubernetes: {
     prompt: "k8s_report_prompt",
-    queries: ["k8s_cluster_cpu", "k8s_cluster_memory", "k8s_workload_cpu", "k8s_workload_memory"],
+    queries: ["k8s_cluster_cpu", "k8s_cluster_memory", "k8s_workload_cpu", "k8s_workload_memory", "k8s_rightsizing"],
     title: { Korean: "Kubernetes 최적화", English: "Kubernetes optimization" },
     short: { Korean: "K8s", English: "K8s" },
     period: { Korean: "7일 p95", English: "7 days, p95" },
@@ -122,6 +125,7 @@ const QUERY_TITLES: Record<InfraQueryName, Record<InfraLanguage, string>> = {
   k8s_cluster_memory: { Korean: "클러스터 메모리 (7일 p95)", English: "Cluster memory (7-day p95)" },
   k8s_workload_cpu: { Korean: "워크로드 CPU (7일 p95)", English: "Workload CPU (7-day p95)" },
   k8s_workload_memory: { Korean: "워크로드 메모리 (7일 p95)", English: "Workload memory (7-day p95)" },
+  k8s_rightsizing: { Korean: "Pod 최적화 후 예상 (7일 p95)", English: "After pod rightsizing (7-day p95)" },
   host_utilization: { Korean: "호스트 사용률 (30일 p90)", English: "Host utilization (30-day p90)" },
   disk_overutilized: { Korean: "과다 사용 디스크 (30일, 95% 초과)", English: "Over-utilized disks (30 days, > 95%)" },
   disk_underutilized: { Korean: "과소 사용 디스크 (30일, 50% 미만)", English: "Under-utilized disks (30 days, < 50%)" },
@@ -149,6 +153,8 @@ type TableSpec = {
   countField?: string;
   nested?: string;
   vertical?: string;
+  labelField?: string;
+  ranges?: { min: string; max: string; label: Record<InfraLanguage, string> }[];
   totals?: { field: string; label: Record<InfraLanguage, string> }[];
   columns: TableColumn[];
 };
@@ -177,7 +183,7 @@ const TABLES: Record<InfraQueryName, TableSpec> = {
     ],
   },
   k8s_cluster_memory: {
-    layout: "byFinding", findingField: "finding", countField: "count_clusters_with_finding", vertical: "k8s.cluster.name",
+    layout: "rows", vertical: "k8s.cluster.name",
     columns: [
       col("avg_node_count", "현재 노드 수", "Nodes now"),
       col("p95_mem_allocatable_gib", "할당 가능 메모리 (GiB)", "Allocatable memory (GiB)"),
@@ -219,8 +225,30 @@ const TABLES: Record<InfraQueryName, TableSpec> = {
       col("recommended_limit_mib", "권장 제한 (MiB)", "Recommended limits (MiB)", true),
     ],
   },
+  k8s_rightsizing: {
+    layout: "rows", vertical: "k8s.cluster.name",
+    columns: [
+      col("avg_node_count", "현재 노드 수", "Nodes now"),
+      col("analyzed_cpu_requests_percent", "분석한 워크로드의 CPU 요청 비중 (%)", "Share of CPU requests in analyzed workloads (%)"),
+      col("analyzed_mem_requests_percent", "분석한 워크로드의 메모리 요청 비중 (%)", "Share of memory requests in analyzed workloads (%)"),
+      col("cpu_requests_now_mcores", "CPU 요청 현재 (mcores)", "CPU requests now (mcores)"),
+      col("cpu_requests_change_mcores", "CPU 요청 변화 (mcores)", "CPU requests change (mcores)"),
+      col("cpu_requests_after_mcores", "CPU 요청 최적화 후 (mcores)", "CPU requests after (mcores)"),
+      col("nodes_needed_after_for_cpu", "최적화 후 CPU 기준 필요 노드", "Nodes needed for CPU after"),
+      col("mem_requests_now_gib", "메모리 요청 현재 (GiB)", "Memory requests now (GiB)"),
+      col("mem_requests_change_gib", "메모리 요청 변화 (GiB)", "Memory requests change (GiB)"),
+      col("mem_requests_after_gib", "메모리 요청 최적화 후 (GiB)", "Memory requests after (GiB)"),
+      col("nodes_needed_after_for_memory", "최적화 후 메모리 기준 필요 노드", "Nodes needed for memory after"),
+      col("minimum_nodes_after", "최적화 후 최소 노드 수", "Minimum nodes after"),
+      col("removable_nodes_after", "최적화 후 줄일 수 있는 노드", "Nodes that can go after"),
+    ],
+  },
   host_utilization: {
-    layout: "byFinding", nested: "utilization_groups", findingField: "utilization", countField: "count",
+    layout: "byFinding", nested: "utilization_groups", findingField: "utilization", countField: "count", labelField: "k8s_cluster",
+    ranges: [
+      { min: "cpu_p90_min_percent", max: "cpu_p90_max_percent", label: { Korean: "CPU p90 범위 (%)", English: "CPU p90 range (%)" } },
+      { min: "mem_p90_min_percent", max: "mem_p90_max_percent", label: { Korean: "메모리 p90 범위 (%)", English: "Memory p90 range (%)" } },
+    ],
     totals: [total("total_hosts", "전체 호스트", "Hosts in total")],
     columns: [
       col("dt.entity.host.name", "호스트", "Host"),
@@ -341,9 +369,11 @@ const DATA_RULES = [
   "Where limit_below_request is true, the limit is a sum over containers some of which set no limit (0 means none set) - mention that the limit cannot be judged from the sum.",
   "Do not write any tables - not even a table of counts - and do not list the examples row by row: data tables with every finding, count and example are added under your text automatically. Write prose and short bullets that interpret the data, and name only the few items that matter most, each with its own numbers.",
   "For a cluster, state the node counts as given and only in this form: CPU needs nodes_needed_for_cpu nodes and memory nodes_needed_for_memory, so at least minimum_nodes are needed and removable_nodes can go. Never call a resource binding, limiting or constraining (제한/결정 리소스). A node count is the requests divided by (allocatable per node x 0.85), rounded up - usage does not set it.",
-  "total_workloads is every workload, excluded_workloads those left out and analyzed_workloads those analyzed (total minus excluded, already worked out): name each as given, and never add, subtract or otherwise combine counts yourself.",
+  "Write the workload counts only in this form: of total_workloads workloads, analyzed_workloads were analyzed and excluded_workloads left out (전체 N개 중 M개를 분석하고 K개를 제외). Never add, subtract or otherwise combine counts yourself.",
   "throttling_p95 is a relative indicator: write it as a bare number, never followed by mcores or any other unit.",
-  "Usage above the requests does not stop scheduling: under contention such a workload gets less CPU, and under memory pressure it is among the first evicted. Say that, and never use the word scheduling (스케줄링).",
+  "Usage above the requests does not stop scheduling: for CPU it means less CPU under contention, for memory being among the first evicted under memory pressure - eviction concerns memory only. Never use the word scheduling (스케줄링).",
+  "A cluster's finding is its node action, from minimum_nodes: SCALE_DOWN (removable_nodes can go), SCALE_UP (more nodes are needed) or NOMINAL. The memory data has figures only and no finding of its own - never present a memory-only scale-down.",
+  "After pod rightsizing gives each cluster's requests and node counts once every recommended request is applied: say what rightsizing does to the nodes only with minimum_nodes_after and removable_nodes_after, and never guess whether the requests rise or fall. analyzed_cpu_requests_percent and analyzed_mem_requests_percent show, per cluster, how much of the requests the advice covers; only for a cluster where a share is under 50%, say that most of those requests belong to the pods left out (for example Spark executors), so sizing them is the larger lever.",
   "Throttling concerns CPU only - never mention throttling for memory.",
   "A memory working set within about 1% of its limit can be page cache filling up to the limit: say that raising such a limit may only grow the cache, so check the container's actual need first.",
   "EXCLUDED_NO_CONTROLLER counts pods without a controller (for example Spark executors or debug pods) and static pods: they are renamed on every run and sized elsewhere. Give their count in one line and no advice for them.",
@@ -417,7 +447,8 @@ const K8S_DATA = `{
   "Workload optimization": {
     "CPU": ${records("k8s_workload_cpu")},
     "Memory": ${records("k8s_workload_memory")}
-  }
+  },
+  "After pod rightsizing": ${records("k8s_rightsizing")}
 }`;
 
 const K8S_PROMPT = `Provide a \`Kubernetes Optimization Report\`, in markdown for these 2 usecases:
@@ -441,7 +472,7 @@ A cluster's CPU and memory findings must be read together: the node count can go
 
 const K8S_INSTRUCTION = `Be sure the report includes an overview with total_workloads, analyzed_workloads and excluded_workloads, what each finding means, the priorities, and the resources that can be freed (removable_nodes) - no money amounts.
 Never write scheduling (스케줄링): requests below usage mean less CPU under contention and early eviction under memory pressure.
-Priorities: first OOM kills and limit increases, then every requests increase (all INCREASE_REQUESTS workloads, CPU and memory, with their counts), then reductions of requests and limits, and node changes last, after the pods are resized.`;
+Priorities: first OOM kills and limit increases, then every requests increase (all INCREASE_REQUESTS workloads, CPU and memory, with their counts), then reductions of requests and limits, and node changes last, after the pods are resized (minimum_nodes_after).`;
 
 const HOST_PROMPT = `Provide a markdown report for the following use case:
 ## Optimize host sizing
@@ -451,7 +482,9 @@ If a user wants to optimize the size of their hosts, they generally have three g
 3. Increase the size of under-provisioned hosts to reduce risk
 
 Be sure to provide an overview (total_hosts and the number of hosts per utilization) and any insights from the data provided. cpu_p90_percent and mem_p90_percent are percentages of the host's CPU and memory.
-Hosts in the KUBERNETES_NODE group are Kubernetes nodes (k8s_cluster names their cluster): do not recommend resizing, removing or adding them one by one - they are sized with their cluster, so refer to the Kubernetes report's cluster section, and only mention nodes running hot.
+Each group gives the range of its hosts (cpu_p90_min_percent to cpu_p90_max_percent, and the same for memory): describe a group by its range, never by its examples.
+Hosts in a KUBERNETES_NODE group are Kubernetes nodes, one group per cluster (k8s_cluster); a node's host CPU covers everything on the host over 30 days, while the cluster figures are container requests over 7 days, so do not judge cluster capacity from it.
+For KUBERNETES_NODE hosts: do not recommend resizing, removing or adding them one by one - they are sized with their cluster, so refer to the Kubernetes report's cluster section, and only mention nodes running hot.
 Name the change for each group (smaller or larger instances, shutting down) without any money amount.`;
 
 const DISK_PROMPT = `Provide a markdown report for:
@@ -554,25 +587,29 @@ const renderData = (spec, records, language, text) => {
   if (spec.totals) parts.push(spec.totals.map((item) => "**" + item.label[language] + ":** " + cell(first[item.field], false, text)).join(" · "));
   if (spec.layout === "rows") {
     const rows = spec.nested ? (Array.isArray(first[spec.nested]) ? first[spec.nested] : []) : records;
-    parts.push(rows.length > 0 ? table(spec.columns, rows, language, text) : "_" + text.none + "_");
+    const drawn = spec.vertical
+      ? rows.slice(0, MAX_ROWS).map((row) => "**" + cell(row[spec.vertical], false, text) + "**" + NL + NL + verticalTable(spec.columns, row, language, text)).join(NL + NL)
+      : table(spec.columns, rows, language, text);
+    parts.push(rows.length > 0 ? drawn : "_" + text.none + "_");
     return parts.join(NL + NL);
   }
   const groups = (spec.nested ? (Array.isArray(first[spec.nested]) ? first[spec.nested] : []) : records).slice();
   groups.sort((a, b) => findingRank(a[spec.findingField]) - findingRank(b[spec.findingField]));
   const countOnly = [];
   for (const group of groups) {
-    const label = findingLabel(group[spec.findingField], language);
+    const label = findingLabel(group[spec.findingField], language) + (spec.labelField && group[spec.labelField] ? " - " + cell(group[spec.labelField], false, text) : "");
+    const ranges = (spec.ranges ?? []).map((range) => range.label[language] + ": " + cell(group[range.min], false, text) + "~" + cell(group[range.max], false, text)).join(" · ");
     const count = group[spec.countField];
     const examples = Array.isArray(group.examples) ? group.examples : [];
     if (examples.length === 0) {
-      countOnly.push("- " + label + ": " + cell(count, false, text) + text.count);
+      countOnly.push("- " + label + ": " + cell(count, false, text) + text.count + (ranges ? " (" + ranges + ")" : ""));
       continue;
     }
     const tables = spec.vertical
       ? examples.map((row) => "**" + cell(row[spec.vertical], false, text) + "**" + NL + NL + verticalTable(spec.columns, row, language, text)).join(NL + NL)
       : table(spec.columns, examples, language, text);
     const sample = Number(count) > examples.length ? NL + NL + "_" + text.sample(examples.length, cell(count, false, text)) + "_" : "";
-    parts.push("**" + label + " · " + cell(count, false, text) + text.count + "**" + NL + NL + tables + sample);
+    parts.push("**" + label + " · " + cell(count, false, text) + text.count + "**" + (ranges ? NL + NL + ranges : "") + NL + NL + tables + sample);
   }
   if (groups.length === 0) parts.push("_" + text.none + "_");
   if (countOnly.length > 0) parts.push(countOnly.join(NL));
@@ -1038,6 +1075,7 @@ const taskDefinitions = (): Record<string, TaskDefinition> => ({
   k8s_cluster_memory: query("k8s_cluster_memory", "kubernetes", { x: -1, y: 1 }),
   k8s_workload_cpu: query("k8s_workload_cpu", "kubernetes", { x: 1, y: 1 }),
   k8s_workload_memory: query("k8s_workload_memory", "kubernetes", { x: 2, y: 1 }),
+  k8s_rightsizing: query("k8s_rightsizing", "kubernetes", { x: 3, y: 1 }),
   k8s_report_prompt: prompt("kubernetes", { x: 0, y: 2 }, K8S_PROMPT, K8S_INSTRUCTION, K8S_DATA),
   // The domains run one after another, as in the template, so the AI calls do not all land at once:
   // each waits for the report before it (ANY - a skipped or failed one does not hold the next back).
