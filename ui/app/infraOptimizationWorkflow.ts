@@ -21,7 +21,8 @@ import { answerLanguageLine } from "./problemAnalysis";
 
 /**
  * v9: the tenant leads the email subject ("[diw85600] ..."), and the email and notebook name the
- * environment with its URL - one inbox can get these from several tenants.
+ * environment with its URL - one inbox can get these from several tenants - and each domain's data
+ * period. The saturated-interfaces query looks at 7 days instead of the default 2 h.
  * v8: requests, limits and minimum node counts computed in the queries; the AI presents them.
  * v7: corrected cluster and disk queries, values in display units, data rules for the AI, and a
  * key-actions summary on top (SUMMARY_TASK) - see infraOptimizationQueries.ts and DATA_RULES.
@@ -69,30 +70,34 @@ export const DEFAULT_INFRA_INPUT: InfraOptimizationInput = {
 };
 
 /** What each domain queries and which prompt task writes its report. */
-const DOMAINS: Record<InfraDomain, { prompt: string; queries: InfraQueryName[]; title: Record<InfraLanguage, string>; short: Record<InfraLanguage, string> }> = {
+const DOMAINS: Record<InfraDomain, { prompt: string; queries: InfraQueryName[]; title: Record<InfraLanguage, string>; short: Record<InfraLanguage, string>; period: Record<InfraLanguage, string> }> = {
   kubernetes: {
     prompt: "k8s_report_prompt",
     queries: ["k8s_cluster_cpu", "k8s_cluster_memory", "k8s_workload_cpu", "k8s_workload_memory"],
     title: { Korean: "Kubernetes 최적화", English: "Kubernetes optimization" },
     short: { Korean: "K8s", English: "K8s" },
+    period: { Korean: "7일 p95", English: "7 days, p95" },
   },
   host: {
     prompt: "host_report_prompt",
     queries: ["host_utilization"],
     title: { Korean: "호스트 최적화", English: "Host optimization" },
     short: { Korean: "호스트", English: "Host" },
+    period: { Korean: "30일", English: "30 days" },
   },
   disk: {
     prompt: "disk_report_prompt",
     queries: ["disk_overutilized", "disk_underutilized"],
     title: { Korean: "디스크 최적화", English: "Disk optimization" },
     short: { Korean: "디스크", English: "Disk" },
+    period: { Korean: "30일", English: "30 days" },
   },
   network: {
     prompt: "network_report_prompt",
     queries: ["network_saturated_interfaces", "network_updown_interfaces"],
     title: { Korean: "네트워크 최적화", English: "Network optimization" },
     short: { Korean: "네트워크", English: "Network" },
+    period: { Korean: "포화 7일 p95, up/down 현재 상태", English: "saturation 7 days p95, up/down current state" },
   },
 };
 
@@ -104,7 +109,7 @@ const QUERY_TITLES: Record<InfraQueryName, Record<InfraLanguage, string>> = {
   host_utilization: { Korean: "호스트 사용률 (30일 p90)", English: "Host utilization (30-day p90)" },
   disk_overutilized: { Korean: "과다 사용 디스크 (30일, 95% 초과)", English: "Over-utilized disks (30 days, > 95%)" },
   disk_underutilized: { Korean: "과소 사용 디스크 (30일, 50% 미만)", English: "Under-utilized disks (30 days, < 50%)" },
-  network_saturated_interfaces: { Korean: "포화 인터페이스 (85% 이상)", English: "Saturated interfaces (>= 85%)" },
+  network_saturated_interfaces: { Korean: "포화 인터페이스 (7일 p95 85% 이상)", English: "Saturated interfaces (7-day p95 >= 85%)" },
   network_updown_interfaces: { Korean: "Up/Down 인터페이스", English: "Up/down interfaces" },
 };
 
@@ -268,6 +273,7 @@ const collectReports = () => {
     task: DOMAINS[domain].prompt,
     title: DOMAINS[domain].title,
     short: DOMAINS[domain].short,
+    period: DOMAINS[domain].period,
     queries: DOMAINS[domain].queries.map((name) => ({ title: QUERY_TITLES[name], query: INFRA_QUERIES[name] })),
   }));
   return `const DOMAINS = ${JSON.stringify(domains, null, 2)};
@@ -282,6 +288,7 @@ const TEXT = {
     heading: "# 인프라 최적화 리포트",
     createdAt: "생성 시각",
     environment: "환경",
+    period: "데이터 기간",
     scope: "분석 범위",
     missing: "_이 영역의 리포트가 생성되지 않았습니다._",
     missingList: "리포트를 받지 못한 영역",
@@ -302,6 +309,7 @@ const TEXT = {
     heading: "# Infrastructure optimization report",
     createdAt: "Created",
     environment: "Environment",
+    period: "Data period",
     scope: "Scope",
     missing: "_No report was produced for this domain._",
     missingList: "No report for",
@@ -355,6 +363,8 @@ async function collect(execution_id) {
   const title = text.name + label + " · " + stamp;
   const missing = reports.filter((item) => !item.report).map((item) => item.entry.title[language]);
   const scopeLine = covered.map((entry) => entry.title[language]).join(", ");
+  // How far back each domain looks: the reports do not say, and a reader cannot tell minutes from days.
+  const periodLine = covered.map((entry) => entry.short[language] + " " + entry.period[language]).join(" · ");
 
   // The key actions across the reports (SUMMARY_TASK), shown on top; none when it did not run.
   let summary = "";
@@ -375,7 +385,7 @@ async function collect(execution_id) {
   }
   const tenant = environmentUrl.replace(/^https?:\\/\\//, "").split(".")[0];
   const environmentLine = tenant ? "**" + text.environment + ":** " + tenant + " (" + environmentUrl + ")" : "";
-  return { language, text, stamp, covered, reports, title, missing, scopeLine, summary, environmentUrl, tenant, environmentLine };
+  return { language, text, stamp, covered, reports, title, missing, scopeLine, summary, environmentUrl, tenant, environmentLine, periodLine };
 }
 `;
 };
@@ -395,9 +405,9 @@ const markdown = (text) => ({ id: newId(), type: "markdown", markdown: text });
 const dql = (title, query) => ({ id: newId(), type: "dql", title, showTitle: true, state: { input: { value: query, timeframe: { from: "now()-2h", to: "now()" } } } });
 
 export default async function ({ execution_id }) {
-  const { language, text, stamp, reports, title, missing, scopeLine, summary, environmentUrl, environmentLine } = await collect(execution_id);
+  const { language, text, stamp, reports, title, missing, scopeLine, summary, environmentUrl, environmentLine, periodLine } = await collect(execution_id);
 
-  const sections = [markdown(text.heading + "\\n\\n" + (environmentLine ? environmentLine + "  \\n" : "") + "**" + text.createdAt + ":** " + stamp + "  \\n**" + text.scope + ":** " + scopeLine + "\\n\\n" + text.footer)];
+  const sections = [markdown(text.heading + "\\n\\n" + (environmentLine ? environmentLine + "  \\n" : "") + "**" + text.createdAt + ":** " + stamp + "  \\n**" + text.scope + ":** " + scopeLine + "  \\n**" + text.period + ":** " + periodLine + "\\n\\n" + text.footer)];
   if (summary) sections.push(markdown(text.summary + "\\n\\n" + summary));
   for (const { entry, report } of reports) {
     // The report brings its own title; the domain heading is only for a missing one.
@@ -428,7 +438,7 @@ import { getEnvironmentUrl } from "@dynatrace-sdk/app-environment";
 
 ${collectReports()}
 export default async function ({ execution_id }) {
-  const { language, text, stamp, reports, title, missing, scopeLine, summary, tenant, environmentLine } = await collect(execution_id);
+  const { language, text, stamp, reports, title, missing, scopeLine, summary, tenant, environmentLine, periodLine } = await collect(execution_id);
   // The notebook this run made, if it made one (delivery: both); skipped or failed -> no link.
   let notebookUrl = null;
   try {
@@ -438,7 +448,7 @@ export default async function ({ execution_id }) {
     notebookUrl = null;
   }
   const link = notebookUrl ? "  \\n**" + text.notebook + ":** [" + text.notebookLink + "](" + notebookUrl + ")" : "";
-  const parts = [text.heading, (environmentLine ? environmentLine + "  \\n" : "") + "**" + text.createdAt + ":** " + stamp + "  \\n**" + text.scope + ":** " + scopeLine + (missing.length > 0 ? "  \\n**" + text.missingList + ":** " + missing.join(", ") : "") + link];
+  const parts = [text.heading, (environmentLine ? environmentLine + "  \\n" : "") + "**" + text.createdAt + ":** " + stamp + "  \\n**" + text.scope + ":** " + scopeLine + "  \\n**" + text.period + ":** " + periodLine + (missing.length > 0 ? "  \\n**" + text.missingList + ":** " + missing.join(", ") : "") + link];
   if (summary) parts.push(text.summary + "\\n\\n" + summary);
   for (const { entry, report } of reports) {
     parts.push("---");
