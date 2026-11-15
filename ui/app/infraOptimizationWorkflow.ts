@@ -20,6 +20,8 @@ import { answerLanguageLine } from "./problemAnalysis";
  */
 
 /**
+ * v9: the tenant leads the email subject ("[diw85600] ..."), and the email and notebook name the
+ * environment with its URL - one inbox can get these from several tenants.
  * v8: requests, limits and minimum node counts computed in the queries; the AI presents them.
  * v7: corrected cluster and disk queries, values in display units, data rules for the AI, and a
  * key-actions summary on top (SUMMARY_TASK) - see infraOptimizationQueries.ts and DATA_RULES.
@@ -32,7 +34,7 @@ import { answerLanguageLine } from "./problemAnalysis";
  * to the trash (CLEANUP_TASK).
  * v2: the notebook's title names the domains it covers, and it gets a description.
  */
-export const INFRA_TEMPLATE_VERSION = 8;
+export const INFRA_TEMPLATE_VERSION = 9;
 export const INFRA_WORKFLOW_TITLE = "[Ops Navigator] Infrastructure Optimization";
 /** Finds every version, v1-v2 titled like Dynatrace's template included; the marker decides. */
 export const INFRA_WORKFLOW_SEARCH = "Infrastructure Optimization";
@@ -279,6 +281,7 @@ const TEXT = {
     by: "[Ops Navigator] Infrastructure Optimization",
     heading: "# 인프라 최적화 리포트",
     createdAt: "생성 시각",
+    environment: "환경",
     scope: "분석 범위",
     missing: "_이 영역의 리포트가 생성되지 않았습니다._",
     missingList: "리포트를 받지 못한 영역",
@@ -298,6 +301,7 @@ const TEXT = {
     by: "[Ops Navigator] Infrastructure Optimization",
     heading: "# Infrastructure optimization report",
     createdAt: "Created",
+    environment: "Environment",
     scope: "Scope",
     missing: "_No report was produced for this domain._",
     missingList: "No report for",
@@ -360,7 +364,18 @@ async function collect(execution_id) {
   } catch (error) {
     summary = "";
   }
-  return { language, text, stamp, covered, reports, title, missing, scopeLine, summary };
+
+  // Which tenant ran this: one person can get these mails from several. The tenant id is the URL's
+  // first host label (https://diw85600.apps.dynatrace.com -> diw85600).
+  let environmentUrl = "";
+  try {
+    environmentUrl = getEnvironmentUrl().replace(/\\/$/, "");
+  } catch (error) {
+    environmentUrl = "";
+  }
+  const tenant = environmentUrl.replace(/^https?:\\/\\//, "").split(".")[0];
+  const environmentLine = tenant ? "**" + text.environment + ":** " + tenant + " (" + environmentUrl + ")" : "";
+  return { language, text, stamp, covered, reports, title, missing, scopeLine, summary, environmentUrl, tenant, environmentLine };
 }
 `;
 };
@@ -380,9 +395,9 @@ const markdown = (text) => ({ id: newId(), type: "markdown", markdown: text });
 const dql = (title, query) => ({ id: newId(), type: "dql", title, showTitle: true, state: { input: { value: query, timeframe: { from: "now()-2h", to: "now()" } } } });
 
 export default async function ({ execution_id }) {
-  const { language, text, stamp, reports, title, missing, scopeLine, summary } = await collect(execution_id);
+  const { language, text, stamp, reports, title, missing, scopeLine, summary, environmentUrl, environmentLine } = await collect(execution_id);
 
-  const sections = [markdown(text.heading + "\\n\\n**" + text.createdAt + ":** " + stamp + "  \\n**" + text.scope + ":** " + scopeLine + "\\n\\n" + text.footer)];
+  const sections = [markdown(text.heading + "\\n\\n" + (environmentLine ? environmentLine + "  \\n" : "") + "**" + text.createdAt + ":** " + stamp + "  \\n**" + text.scope + ":** " + scopeLine + "\\n\\n" + text.footer)];
   if (summary) sections.push(markdown(text.summary + "\\n\\n" + summary));
   for (const { entry, report } of reports) {
     // The report brings its own title; the domain heading is only for a missing one.
@@ -396,7 +411,7 @@ export default async function ({ execution_id }) {
   const document = await documentsClient.createDocument({
     body: { name: title, description, type: "notebook", content: new Blob([JSON.stringify(content)], { type: "application/json" }) },
   });
-  const url = getEnvironmentUrl().replace(/\\/$/, "") + "/ui/apps/dynatrace.notebooks/notebook/" + document.id;
+  const url = environmentUrl + "/ui/apps/dynatrace.notebooks/notebook/" + document.id;
   return { notebookId: document.id, name: title, url };
 }
 `;
@@ -409,10 +424,11 @@ export default async function ({ execution_id }) {
  */
 const composeEmailScript = () => `// ${MARKER}
 import { executionsClient } from "@dynatrace-sdk/client-automation";
+import { getEnvironmentUrl } from "@dynatrace-sdk/app-environment";
 
 ${collectReports()}
 export default async function ({ execution_id }) {
-  const { language, text, stamp, reports, title, missing, scopeLine, summary } = await collect(execution_id);
+  const { language, text, stamp, reports, title, missing, scopeLine, summary, tenant, environmentLine } = await collect(execution_id);
   // The notebook this run made, if it made one (delivery: both); skipped or failed -> no link.
   let notebookUrl = null;
   try {
@@ -422,7 +438,7 @@ export default async function ({ execution_id }) {
     notebookUrl = null;
   }
   const link = notebookUrl ? "  \\n**" + text.notebook + ":** [" + text.notebookLink + "](" + notebookUrl + ")" : "";
-  const parts = [text.heading, "**" + text.createdAt + ":** " + stamp + "  \\n**" + text.scope + ":** " + scopeLine + (missing.length > 0 ? "  \\n**" + text.missingList + ":** " + missing.join(", ") : "") + link];
+  const parts = [text.heading, (environmentLine ? environmentLine + "  \\n" : "") + "**" + text.createdAt + ":** " + stamp + "  \\n**" + text.scope + ":** " + scopeLine + (missing.length > 0 ? "  \\n**" + text.missingList + ":** " + missing.join(", ") : "") + link];
   if (summary) parts.push(text.summary + "\\n\\n" + summary);
   for (const { entry, report } of reports) {
     parts.push("---");
@@ -430,7 +446,9 @@ export default async function ({ execution_id }) {
   }
   parts.push("---");
   parts.push("_" + (notebookUrl ? text.mailFooterLinked : text.mailFooter) + "_");
-  return { subject: title, body: parts.join("\\n\\n"), notebookUrl };
+  // The tenant leads the subject so an inbox fed by several tenants sorts and filters by it; the
+  // notebook keeps the plain title - it lives in its tenant already.
+  return { subject: (tenant ? "[" + tenant + "] " : "") + title, body: parts.join("\\n\\n"), notebookUrl };
 }
 `;
 
