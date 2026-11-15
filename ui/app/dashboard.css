@@ -327,3 +327,5 @@
 .automation-actions { align-items: center; flex-wrap: wrap; }
 .automation-more > summary { cursor: pointer; font-size: 13px; font-weight: 600; color: var(--dashboard-ink); margin-bottom: 14px; }
 .automation-more[open] { display: flex; flex-direction: column; gap: 16px; }
+.automation-card-status { flex: none; white-space: nowrap; }
+.automation-card-status > * { max-width: none; }

@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { Button } from "@dynatrace/strato-components/buttons";
 import { Chip } from "@dynatrace/strato-components/content";
-import { Checkbox, FormField, Label, TextInput, ToggleButtonGroup } from "@dynatrace/strato-components/forms";
+import { Checkbox, FieldSet, FormField, Label, TextInput, ToggleButtonGroup } from "@dynatrace/strato-components/forms";
 import { ExternalLinkIcon } from "@dynatrace/strato-icons";
 import { workflowLink } from "../analyzeWorkflow";
 import { INFRA_WORKFLOW_PERMISSIONS, createInfraWorkflowLink, executionLink, findInfraWorkflows, type CreatedWorkflow, type LastRun } from "../automationWorkflows";
@@ -140,19 +140,21 @@ const InfraOptimizationCard = () => {
   const form = (
     <>
       <div className="automation-form">
-        <FormField>
-          <Label>분석 범위</Label>
+        {/* A FieldSet, not a FormField: a FormField gives the one id it holds to every control inside,
+            so all four labels pointed at the first checkbox - clicking Network toggled Kubernetes. */}
+        <FieldSet>
+          <FieldSet.Legend>분석 범위</FieldSet.Legend>
           <div className="automation-scope">
             {INFRA_DOMAINS.map((domain) => (
               <div key={domain}>
-                <Checkbox name={`scope-${domain}`} value={scope[domain]} onChange={(checked: boolean) => setScope((value) => ({ ...value, [domain]: checked }))}>
+                <Checkbox id={`automation-scope-${domain}`} name={`scope-${domain}`} value={scope[domain]} onChange={(checked: boolean) => setScope((value) => ({ ...value, [domain]: checked }))}>
                   {DOMAIN_LABELS[domain].label}
                 </Checkbox>
                 <span className="automation-note">{DOMAIN_LABELS[domain].hint}</span>
               </div>
             ))}
           </div>
-        </FormField>
+        </FieldSet>
 
         <FormField>
           <Label>결과 전달</Label>
@@ -218,7 +220,8 @@ const InfraOptimizationCard = () => {
             리포트는 이메일로 보내거나 노트북 하나로 저장합니다.
           </p>
         </div>
-        {chip}
+        {/* Kept at its full width: in the flex row the chip shrank to "미...". */}
+        <span className="automation-card-status">{chip}</span>
       </header>
 
       <section className={`automation-banner automation-banner-${hasCurrent ? "ok" : workflows.length > 0 ? "old" : "none"}`}>
