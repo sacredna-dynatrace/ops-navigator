@@ -20,6 +20,7 @@ import { answerLanguageLine } from "./problemAnalysis";
  */
 
 /**
+ * v8: requests, limits and minimum node counts computed in the queries; the AI presents them.
  * v7: corrected cluster and disk queries, values in display units, data rules for the AI, and a
  * key-actions summary on top (SUMMARY_TASK) - see infraOptimizationQueries.ts and DATA_RULES.
  * v6: email and notebook together ("both", the email links the notebook); Assist's disclaimer is
@@ -31,7 +32,7 @@ import { answerLanguageLine } from "./problemAnalysis";
  * to the trash (CLEANUP_TASK).
  * v2: the notebook's title names the domains it covers, and it gets a description.
  */
-export const INFRA_TEMPLATE_VERSION = 7;
+export const INFRA_TEMPLATE_VERSION = 8;
 export const INFRA_WORKFLOW_TITLE = "[Ops Navigator] Infrastructure Optimization";
 /** Finds every version, v1-v2 titled like Dynatrace's template included; the marker decides. */
 export const INFRA_WORKFLOW_SEARCH = "Infrastructure Optimization";
@@ -135,13 +136,16 @@ const FAILED_LINE = `A data set given as ${QUERY_FAILED} could not be collected 
  * How to read the data, for every report. Without these the 2026-11-15 Kubernetes report (diw85600,
  * notebook 3976dac3) left most memory cells "-" although every value was there, recommended a 512 MiB
  * request "increase" for a workload already at 1 GiB, called a workload with 0 throttling "heavily
- * throttled", and priced an EC2 host whose instance type read "HVM domU".
+ * throttled", and priced an EC2 host whose instance type read "HVM domU". Told to keep a direction
+ * rule, v7 still "raised" a 175 MiB limit to 150, so since v8 the queries compute every
+ * recommendation (recommended_* fields) and the AI only presents and explains them.
  */
 const DATA_RULES = [
   "Data rules: use only values present in the data, exactly as given - they are already in the unit their field name says (_mcores, _mib, _gib, _percent); do not convert or recompute them. Write '-' only for a value that is null in the data.",
-  "A recommendation must move in the direction of its finding: for INCREASE_* the recommended value is higher than the current one, for REDUCE_* lower.",
-  "Where limit_below_request is true, the limit is a sum over containers some of which set no limit - mention it, but base no limit recommendation on that number.",
-  "Estimate costs only for a recognizable cloud instance type (for example m5.large, e2-standard-4, Standard_D4s_v3); otherwise write that the cost cannot be estimated. State the price basis you assume.",
+  "Recommended values are already computed: present recommended_request_* and recommended_limit_* exactly as given, and never write a recommended number of your own. A null recommended value means keep the current setting - say 'keep' (유지), not a number. Explain each recommendation briefly from the usage, requests and limits.",
+  "Where limit_below_request is true, the limit is a sum over containers some of which set no limit (0 means none set) - mention that the limit cannot be judged from the sum.",
+  "For a cluster, the smallest safe node count is the larger of nodes_needed_for_cpu and nodes_needed_for_memory; never recommend fewer nodes than that, and recommend removing nodes only when it is below avg_node_count.",
+  "Estimate costs only for a recognizable cloud instance type (for example m5.large, e2-standard-4, Standard_D4s_v3), and state the price basis you assume; otherwise write that the cost cannot be estimated - no amount and no percentage.",
   "Do not list items whose finding is NOMINAL; give their count only.",
 ].join("\n");
 
@@ -196,7 +200,7 @@ const K8S_PROMPT = `Provide a \`Kubernetes Optimization Report\`, in markdown fo
 
 # 1. Optimize pod sizing
 Goal: identify pod optimization opportunities and recommend Kubernetes pod \`requests\` and \`limits\` for CPU and memory that reduce OOMKills/throttling while avoiding wasted reserved capacity.
-Use the data provided in the context. Findings are already provided for scale; however, still analyze the numbers and produce a recommendation for \`requests\` and \`limits\` for each example, if appropriate.
+Use the data provided in the context. Findings and the recommended \`requests\` and \`limits\` are already computed for each example; present them and explain each one from the numbers.
 
 # 2. Optimize cluster sizing
 Goals:
@@ -204,14 +208,14 @@ Goals:
 2. Reduce over-provisioned nodes to save on cost
 3. Increase the size of under-provisioned nodes to reduce risk
 Use the data provided in the context. Findings are already provided for scale; however, still analyze the numbers and produce a recommendation for each example cluster. For instance, you could recommend reducing the number of nodes by 3 or scale down from a \`m7a.2xlarge\` to a \`m7a.large\`.
-A cluster's CPU and memory findings must be read together: a node count or size change has to leave room for both the CPU requests and the memory requests (requests_percent_of_allocatable). Never recommend removing nodes when the remaining allocatable would fall below either one.
+A cluster's CPU and memory findings must be read together: the node count can go no lower than the larger of nodes_needed_for_cpu and nodes_needed_for_memory.
 If possible, using the recommendations you generate and the instanceType and cloudType, estimate potential cost savings.
 
 # Golden rules
 1. Always show all of the provided findings in the context
 2. Show the metrics that were included in the context for each example
 3. Do not skip examples and always indicate that they are just a small sample of the total findings provided at the end of the report.
-4. Check every recommendation against the numbers before writing it: a recommended request or limit must be consistent with the observed usage and with the finding.
+4. Use the recommended values from the context as they are; do not adjust them.
 5. Be sure to include the count of similar findings from the context, when giving the sample recommendations.`;
 
 const K8S_INSTRUCTION = `Be sure the report includes an overview, summary counts, examples, and if possible an estimate of cost savings.
@@ -225,7 +229,7 @@ If a user wants to optimize the size of their hosts, they generally have three g
 2. Reduce over-provisioned hosts to save on cost
 3. Increase the size of under-provisioned hosts to reduce risk
 
-Be sure to provide an overview (including number of hosts per utilization) and any insights from the data provided. If possible give an estimated range of cost savings.`;
+Be sure to provide an overview (including number of hosts per utilization) and any insights from the data provided. Give an estimated range of cost savings only for hosts whose instanceType is set; for a host without one, write that its cost cannot be estimated - no amount and no percentage.`;
 
 const DISK_PROMPT = `Provide a markdown report for:
 ## Optimize disk usage
