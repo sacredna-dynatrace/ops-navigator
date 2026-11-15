@@ -20,8 +20,16 @@ import { answerLanguageLine } from "./problemAnalysis";
  */
 
 /** v2: the notebook's title names the domains it covers, and it gets a description. */
-export const INFRA_TEMPLATE_VERSION = 2;
-export const INFRA_WORKFLOW_TITLE = "Infrastructure Optimization Agent";
+/**
+ * v3: titled "[Ops Navigator] ..." - Dynatrace's own template is "Infrastructure Optimization Agent",
+ * and the two could not be told apart in the Workflows app - and the first run moves older versions
+ * to the trash (CLEANUP_TASK).
+ */
+export const INFRA_TEMPLATE_VERSION = 3;
+export const INFRA_WORKFLOW_TITLE = "[Ops Navigator] Infrastructure Optimization";
+/** Finds every version, v1-v2 titled like Dynatrace's template included; the marker decides. */
+export const INFRA_WORKFLOW_SEARCH = "Infrastructure Optimization";
+export const CLEANUP_TASK = "cleanup_old_versions";
 export const NOTEBOOK_TASK = "publish_notebook";
 /** In the notebook task's script - the intent drops a workflow description - to recognize our workflow. */
 export const INFRA_MARKER_PATTERN = /ops-navigator infra-optimization template v(\d+)/;
@@ -253,26 +261,26 @@ const TEXT = {
     all: "전체",
     none: "리포트 없음",
     created: "생성",
-    by: "Ops Navigator · Infrastructure Optimization Agent",
+    by: "[Ops Navigator] Infrastructure Optimization",
     heading: "# 인프라 최적화 리포트",
     createdAt: "생성 시각",
     scope: "분석 범위",
     missing: "_이 영역의 리포트가 생성되지 않았습니다._",
     data: "원본 데이터 쿼리",
-    footer: "Ops Navigator의 Infrastructure Optimization Agent 워크플로가 생성했습니다. 리포트는 Dynatrace 생성형 AI가 작성했으며, 아래 쿼리로 원본 데이터를 다시 확인할 수 있습니다.",
+    footer: "Ops Navigator의 Infrastructure Optimization 워크플로가 생성했습니다. 리포트는 Dynatrace 생성형 AI가 작성했으며, 아래 쿼리로 원본 데이터를 다시 확인할 수 있습니다.",
   },
   English: {
     name: "[Infra Optimization] ",
     all: "All",
     none: "no report",
     created: "Created",
-    by: "Ops Navigator · Infrastructure Optimization Agent",
+    by: "[Ops Navigator] Infrastructure Optimization",
     heading: "# Infrastructure optimization report",
     createdAt: "Created",
     scope: "Scope",
     missing: "_No report was produced for this domain._",
     data: "Raw data queries",
-    footer: "Created by the Infrastructure Optimization Agent workflow of Ops Navigator. The reports are written by Dynatrace generative AI; the queries below show the data behind them.",
+    footer: "Created by the Infrastructure Optimization workflow of Ops Navigator. The reports are written by Dynatrace generative AI; the queries below show the data behind them.",
   },
 };
 
@@ -332,7 +340,54 @@ export default async function ({ execution_id }) {
 `;
 };
 
+/**
+ * Moves this template's older versions to the Workflows trash. Only workflows whose notebook task
+ * carries the marker with a lower version: Dynatrace's own template and same-version copies made on
+ * purpose stay. Runs as the workflow's actor - the app itself may not delete workflows. Never throws:
+ * a refused delete must not fail the report, it is listed in the result instead.
+ */
+const cleanupScript = () => `// ${MARKER}
+import { executionsClient, workflowsClient } from "@dynatrace-sdk/client-automation";
+
+const CURRENT = ${INFRA_TEMPLATE_VERSION};
+const MARKER = /ops-navigator infra-optimization template v(\\d+)/;
+
+export default async function ({ execution_id }) {
+  const deleted = [];
+  const failed = [];
+  try {
+    const execution = await executionsClient.getExecution({ id: execution_id });
+    const self = execution.workflow;
+    const list = await workflowsClient.getWorkflows({ search: "${INFRA_WORKFLOW_SEARCH}", limit: 100 });
+    for (const item of list.results) {
+      if (item.id === self) continue;
+      const full = await workflowsClient.getWorkflow({ id: item.id });
+      const script = String(full.tasks?.["${NOTEBOOK_TASK}"]?.input?.script ?? "");
+      const match = MARKER.exec(script);
+      if (!match || Number(match[1]) >= CURRENT) continue;
+      try {
+        await workflowsClient.deleteWorkflow({ id: full.id });
+        deleted.push({ id: full.id, title: full.title, version: Number(match[1]) });
+      } catch (error) {
+        failed.push({ id: full.id, title: full.title, version: Number(match[1]), reason: String(error?.message ?? error) });
+      }
+    }
+  } catch (error) {
+    failed.push({ reason: String(error?.message ?? error) });
+  }
+  return { deleted, failed };
+}
+`;
 const taskDefinitions = (): Record<string, TaskDefinition> => ({
+  // Housekeeping beside the reports: nothing waits for it, so it cannot hold them up.
+  [CLEANUP_TASK]: {
+    action: "dynatrace.automations:run-javascript",
+    description: "Moves older versions of this workflow made by Ops Navigator to the trash",
+    input: { script: cleanupScript() },
+    position: { x: 3, y: 1 },
+    predecessors: [],
+    conditions: { states: {} },
+  },
   // Kubernetes - the four queries run side by side.
   k8s_cluster_cpu: query("k8s_cluster_cpu", "kubernetes", { x: -2, y: 1 }),
   k8s_cluster_memory: query("k8s_cluster_memory", "kubernetes", { x: -1, y: 1 }),

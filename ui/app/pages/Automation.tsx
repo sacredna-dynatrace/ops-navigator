@@ -67,6 +67,8 @@ const LastRunLine = ({ run }: { run: LastRun | null }) => {
       마지막 실행:
       <Chip size="condensed" color={RUN_COLORS[run.state] ?? "neutral"}>{RUN_STATES[run.state] ?? run.state}</Chip>
       <a href={executionLink(run.id)} target="_blank" rel="noopener noreferrer">{run.startedAt ? formatTime(run.startedAt) : "실행 기록"} <ExternalLinkIcon /></a>
+      {run.cleaned > 0 && <span className="automation-note">· 이전 버전 {run.cleaned}개를 휴지통으로 정리했습니다</span>}
+      {run.cleanupFailed > 0 && <span className="automation-warning">· 이전 버전 {run.cleanupFailed}개를 정리하지 못했습니다 (workflow 권한에 automation:workflows:write 필요)</span>}
     </span>
   );
 };
@@ -76,13 +78,19 @@ const CreatedRow = ({ workflow }: { workflow: CreatedWorkflow }) => (
   <div className={`automation-created${workflow.outdated ? " automation-created-old" : ""}`}>
     <div className="automation-created-title">
       <strong>{workflow.title}</strong>
+      {!workflow.deployed && <Chip size="condensed" color="warning">Draft</Chip>}
       <span className="automation-note">
         {workflow.isPrivate ? "Private" : "Public"} · 트리거: {TRIGGERS[workflow.triggerType] ?? workflow.triggerType} · 템플릿 v{workflow.version}
       </span>
     </div>
     {workflow.outdated && (
       <span className="automation-warning">
-        이전 템플릿(v{workflow.version})입니다. 노트북 제목에 분석 범위가 들어가지 않습니다. 아래에서 v{INFRA_TEMPLATE_VERSION}로 다시 만들고, 이 workflow는 Workflows 앱에서 지우세요.
+        이전 템플릿(v{workflow.version})입니다. v{INFRA_TEMPLATE_VERSION}를 만들어 처음 실행하면 이 workflow는 자동으로 휴지통(Trash)으로 정리됩니다.
+      </span>
+    )}
+    {!workflow.outdated && !workflow.deployed && (
+      <span className="automation-warning">
+        Draft 상태입니다. Run으로 실행은 되지만, 스케줄 트리거를 쓰려면 Workflows 앱에서 <b>Deploy</b>하세요.
       </span>
     )}
     <span>저장된 설정: {workflow.settings ?? "Workflows 앱에서 Input을 직접 바꿨습니다"}</span>
@@ -125,7 +133,7 @@ const InfraOptimizationCard = () => {
   const chip =
     found.kind === "loading" ? <Chip color="neutral">확인 중</Chip>
     : found.kind === "unknown" ? <Chip color="neutral">상태 알 수 없음</Chip>
-    : hasCurrent ? <Chip color="success">생성됨{workflows.length > 1 ? ` (${workflows.length})` : ""}</Chip>
+    : hasCurrent ? <Chip color={current.some((workflow) => workflow.deployed) ? "success" : "warning"}>생성됨{current.some((workflow) => workflow.deployed) ? "" : " · Draft"}{workflows.length > 1 ? ` (${workflows.length})` : ""}</Chip>
     : workflows.length > 0 ? <Chip color="warning">이전 템플릿</Chip>
     : <Chip color="neutral">미생성</Chip>;
 
@@ -232,7 +240,8 @@ const InfraOptimizationCard = () => {
         <summary>만든 뒤 할 일</summary>
         <ol>
           <li><b>워크플로 만들기</b>를 누르면 Workflows 앱이 새 탭에서 정의가 채워진 상태로 열립니다. 저장하면 만든 사람의 권한으로 실행되는 <b>Private</b> workflow가 됩니다. 공유하려면 Workflows 앱에서 Public으로 바꾸세요.</li>
-          <li>트리거는 수동입니다. <b>Run</b>으로 한 번 시험해 본 뒤 Trigger를 일간·주간 스케줄로 바꾸세요.</li>
+          <li>저장한 workflow는 <b>Draft</b>입니다. <b>Run</b>으로 한 번 시험해 본 뒤 Trigger를 일간·주간 스케줄로 바꾸고 <b>Deploy</b>하세요. Draft로는 스케줄이 동작하지 않습니다.</li>
+          <li>처음 실행할 때 이 앱이 만든 이전 버전 workflow를 휴지통(Trash)으로 옮깁니다. Dynatrace 원본 템플릿과 같은 버전으로 더 만든 workflow는 그대로 둡니다.</li>
           <li>범위·전달 방식·언어·수신자는 workflow의 <b>Input</b>(<code>scope</code>, <code>delivery</code>, <code>language</code>, <code>emails</code>)에 들어 있어 다시 만들지 않고 바꿀 수 있습니다.</li>
           <li>Authorization settings를 맞춤 선택으로 제한했다면 다음 권한을 허용하세요: <code>{INFRA_WORKFLOW_PERMISSIONS.join(", ")}</code>.</li>
         </ol>

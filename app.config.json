@@ -3,7 +3,7 @@
   "environmentUrl": "https://diw85600.apps.dynatrace.com/",
   "app": {
     "name": "Ops Navigator",
-    "version": "1.0.2",
+    "version": "1.0.3",
     "description": "See how your system connects, where problems spread, and let AI explain why",
     "id": "my.ops.navigator",
     "scopes": [
