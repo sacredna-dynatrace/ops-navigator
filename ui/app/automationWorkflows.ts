@@ -1,14 +1,17 @@
 import { getEnvironmentUrl } from "@dynatrace-sdk/app-environment";
 import { executionsClient, workflowsClient } from "@dynatrace-sdk/client-automation";
+import { queryExecutionClient } from "@dynatrace-sdk/client-query";
 import { getIntentLink } from "@dynatrace-sdk/navigation";
 import {
   INFRA_MARKER_PATTERN,
   CLEANUP_TASK,
+  INFRA_DOMAINS,
   INFRA_TEMPLATE_VERSION,
   INFRA_WORKFLOW_SEARCH,
   NOTEBOOK_TASK,
   infraOptimizationWorkflow,
   summarizeInfraInput,
+  type InfraDomain,
   type InfraOptimizationInput,
 } from "./infraOptimizationWorkflow";
 
@@ -111,3 +114,40 @@ export const INFRA_WORKFLOW_PERMISSIONS = [
   "storage:buckets:read", "storage:metrics:read", "storage:entities:read", "storage:smartscape:read",
   "davis-copilot:conversations:execute", "email:emails:send", "document:documents:write", "automation:workflows:read", "automation:workflows:write",
 ];
+
+/**
+ * Whether each domain has data to report on, from one small query each: a metric seen in the last
+ * day, or for network the interface entities the up/down query reads. Without the network device
+ * extension both network queries come back empty or fail (diw85600: no interfaces, no interface
+ * metrics), so the card says so before a workflow is made. Run with queryExecutionClient, not useDql,
+ * so the page's segment filter does not narrow a yes/no question. null: the check itself failed.
+ */
+const AVAILABILITY_QUERIES: Record<InfraDomain, string> = {
+  kubernetes: "timeseries x = avg(dt.kubernetes.container.cpu_usage), from: now()-1d\n| summarize n = count()",
+  host: "timeseries x = avg(dt.host.cpu.usage), from: now()-1d\n| summarize n = count()",
+  disk: "timeseries x = avg(dt.host.disk.used.percent), from: now()-1d\n| summarize n = count()",
+  network: "fetch `dt.entity.network:interface`\n| summarize n = count()",
+};
+
+const countOf = async (query: string): Promise<number> => {
+  let result = await queryExecutionClient.queryExecute({ body: { query, requestTimeoutMilliseconds: 30_000 } });
+  while (result.state === "RUNNING" && result.requestToken) {
+    result = await queryExecutionClient.queryPoll({ requestToken: result.requestToken, requestTimeoutMilliseconds: 10_000 });
+  }
+  return Number((result.result?.records?.[0] as { n?: unknown } | undefined)?.n ?? 0);
+};
+
+export type InfraDataAvailability = Record<InfraDomain, boolean | null>;
+
+export const checkInfraData = async (): Promise<InfraDataAvailability> => {
+  const entries = await Promise.all(
+    INFRA_DOMAINS.map(async (domain) => {
+      try {
+        return [domain, (await countOf(AVAILABILITY_QUERIES[domain])) > 0] as const;
+      } catch {
+        return [domain, null] as const;
+      }
+    }),
+  );
+  return Object.fromEntries(entries) as InfraDataAvailability;
+};

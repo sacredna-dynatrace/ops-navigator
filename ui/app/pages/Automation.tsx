@@ -1,10 +1,10 @@
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Button } from "@dynatrace/strato-components/buttons";
 import { Chip } from "@dynatrace/strato-components/content";
 import { Checkbox, FieldSet, FormField, Label, TextInput, ToggleButtonGroup } from "@dynatrace/strato-components/forms";
 import { ExternalLinkIcon } from "@dynatrace/strato-icons";
 import { workflowLink } from "../analyzeWorkflow";
-import { INFRA_WORKFLOW_PERMISSIONS, createInfraWorkflowLink, executionLink, findInfraWorkflows, type CreatedWorkflow, type LastRun } from "../automationWorkflows";
+import { INFRA_WORKFLOW_PERMISSIONS, checkInfraData, createInfraWorkflowLink, executionLink, findInfraWorkflows, type CreatedWorkflow, type InfraDataAvailability, type LastRun } from "../automationWorkflows";
 import { useReloadOnReturn } from "../hooks/useReloadOnReturn";
 import {
   DEFAULT_INFRA_INPUT,
@@ -106,6 +106,19 @@ const CreatedRow = ({ workflow }: { workflow: CreatedWorkflow }) => (
 const InfraOptimizationCard = () => {
   const { found, reload } = useInfraWorkflows();
   const [scope, setScope] = useState(DEFAULT_INFRA_INPUT.scope);
+  // Which domains have data here. Domains without any are unticked once it arrives - unless the
+  // user already changed the selection, which then stands.
+  const [available, setAvailable] = useState<InfraDataAvailability | null>(null);
+  const scopeTouched = useRef(false);
+  useEffect(() => {
+    let cancelled = false;
+    void checkInfraData().then((result) => {
+      if (cancelled) return;
+      setAvailable(result);
+      if (!scopeTouched.current) setScope((value) => Object.fromEntries(INFRA_DOMAINS.map((domain) => [domain, value[domain] && result[domain] !== false])) as typeof value);
+    });
+    return () => { cancelled = true; };
+  }, []);
   const [delivery, setDelivery] = useState<InfraDelivery>(DEFAULT_INFRA_INPUT.delivery);
   const [language, setLanguage] = useState<InfraLanguage>(DEFAULT_INFRA_INPUT.language);
   const [to, setTo] = useState("");
@@ -147,10 +160,13 @@ const InfraOptimizationCard = () => {
           <div className="automation-scope">
             {INFRA_DOMAINS.map((domain) => (
               <div key={domain}>
-                <Checkbox id={`automation-scope-${domain}`} name={`scope-${domain}`} value={scope[domain]} onChange={(checked: boolean) => setScope((value) => ({ ...value, [domain]: checked }))}>
+                <Checkbox id={`automation-scope-${domain}`} name={`scope-${domain}`} value={scope[domain]} onChange={(checked: boolean) => { scopeTouched.current = true; setScope((value) => ({ ...value, [domain]: checked })); }}>
                   {DOMAIN_LABELS[domain].label}
                 </Checkbox>
                 <span className="automation-note">{DOMAIN_LABELS[domain].hint}</span>
+                {available?.[domain] === false && (
+                  <span className="automation-warning">이 환경에는 데이터가 없습니다. 선택하면 이 영역은 리포트에 &quot;수집하지 못함&quot;으로 나옵니다.</span>
+                )}
               </div>
             ))}
           </div>

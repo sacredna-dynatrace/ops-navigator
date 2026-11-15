@@ -21,11 +21,12 @@ import { answerLanguageLine } from "./problemAnalysis";
 
 /** v2: the notebook's title names the domains it covers, and it gets a description. */
 /**
+ * v4: the cleanup really uses the trash (see cleanupScript); v3's script deleted for good.
  * v3: titled "[Ops Navigator] ..." - Dynatrace's own template is "Infrastructure Optimization Agent",
  * and the two could not be told apart in the Workflows app - and the first run moves older versions
  * to the trash (CLEANUP_TASK).
  */
-export const INFRA_TEMPLATE_VERSION = 3;
+export const INFRA_TEMPLATE_VERSION = 4;
 export const INFRA_WORKFLOW_TITLE = "[Ops Navigator] Infrastructure Optimization";
 /** Finds every version, v1-v2 titled like Dynatrace's template included; the marker decides. */
 export const INFRA_WORKFLOW_SEARCH = "Infrastructure Optimization";
@@ -123,7 +124,15 @@ const KOREAN_LINE = answerLanguageLine("Korean").replace("every sentence, list i
 const LANGUAGE_LINE = byLanguage(KOREAN_LINE, answerLanguageLine("English"));
 const withLanguage = (instruction: string) => (instruction ? `${instruction}\n${LANGUAGE_LINE}` : LANGUAGE_LINE);
 
-const records = (task: string, json = false) => `{{ result("${task}")["records"]${json ? " | to_json()" : ""} }}`;
+/**
+ * A query's records, or QUERY_FAILED when the query errored: the prompts run whatever their queries
+ * did (states ANY), and a failed task's `result()` falls back to the default. Checked on diw85600 -
+ * the prompt got "bad=QUERY_FAILED; good=[]" and the run ended SUCCESS.
+ */
+export const QUERY_FAILED = "QUERY_FAILED";
+const records = (task: string, json = false) => `{{ result("${task}")["records"] | default("${QUERY_FAILED}")${json ? " | to_json()" : ""} }}`;
+/** Tells the AI what QUERY_FAILED means, so it reports the gap instead of inventing findings. */
+const FAILED_LINE = `A data set given as ${QUERY_FAILED} could not be collected - its query failed, typically because that data source is not monitored in this environment. Say so briefly for that part, and do not invent findings for it.`;
 
 // ---- Tasks ---------------------------------------------------------------------------------------
 
@@ -146,16 +155,18 @@ const query = (name: InfraQueryName, domain: InfraDomain, position: { x: number;
   input: { query: INFRA_QUERIES[name] },
   position,
   predecessors: after ? [after] : [],
-  conditions: { states: after ? { [after]: "OK" } : {}, custom: `{{ ${inScope(domain)} }}`, else: "SKIP" },
+  // ANY: a domain whose report or email failed must not keep the next domain from running.
+  conditions: { states: after ? { [after]: "ANY" } : {}, custom: `{{ ${inScope(domain)} }}`, else: "SKIP" },
 });
 
 const prompt = (domain: InfraDomain, position: { x: number; y: number }, text: string, instruction: string, supplementary: string): TaskDefinition => ({
   action: "dynatrace.davis.workflow.actions:prompt-generative-ai",
   description: `Writes the ${DOMAINS[domain].title.English.toLowerCase()} report with Dynatrace generative AI`,
-  input: { config: "disabled", autoTrim: true, prompt: text, instruction: withLanguage(instruction), supplementary },
+  input: { config: "disabled", autoTrim: true, prompt: text, instruction: withLanguage(instruction ? `${instruction}\n${FAILED_LINE}` : FAILED_LINE), supplementary },
   position,
   predecessors: DOMAINS[domain].queries,
-  conditions: { states: Object.fromEntries(DOMAINS[domain].queries.map((name) => [name, "OK"])), custom: `{{ ${inScope(domain)} }}`, else: "SKIP" },
+  // ANY: one failed query leaves the report to the others (see records()).
+  conditions: { states: Object.fromEntries(DOMAINS[domain].queries.map((name) => [name, "ANY"])), custom: `{{ ${inScope(domain)} }}`, else: "SKIP" },
   retry: PROMPT_RETRY,
 });
 
@@ -345,9 +356,17 @@ export default async function ({ execution_id }) {
  * carries the marker with a lower version: Dynatrace's own template and same-version copies made on
  * purpose stay. Runs as the workflow's actor - the app itself may not delete workflows. Never throws:
  * a refused delete must not fail the report, it is listed in the result instead.
+ *
+ * The delete goes through the REST API with `?trash=true`, not workflowsClient.deleteWorkflow: the
+ * API deletes permanently by default, and the workflow runtime's SDK is older than the trash - it has
+ * no getTrashedWorkflows and drops a `trash` option. Both were learned the hard way on diw85600
+ * (2026-11-15): the first v3 test run removed v1 and v2 for good, and a dummy deleted with
+ * `trash: true` never reached the trash, while one deleted by REST did. The trash is read back the
+ * same way, so the result says whether each one really landed there.
  */
 const cleanupScript = () => `// ${MARKER}
 import { executionsClient, workflowsClient } from "@dynatrace-sdk/client-automation";
+import { httpClient } from "@dynatrace-sdk/http-client";
 
 const CURRENT = ${INFRA_TEMPLATE_VERSION};
 const MARKER = /ops-navigator infra-optimization template v(\\d+)/;
@@ -366,7 +385,8 @@ export default async function ({ execution_id }) {
       const match = MARKER.exec(script);
       if (!match || Number(match[1]) >= CURRENT) continue;
       try {
-        await workflowsClient.deleteWorkflow({ id: full.id });
+        // Into the trash (recoverable for 30 days) - without ?trash=true the API deletes for good.
+        await httpClient.send({ url: "/platform/automation/v1/workflows/" + encodeURIComponent(full.id) + "?trash=true", method: "DELETE" });
         deleted.push({ id: full.id, title: full.title, version: Number(match[1]) });
       } catch (error) {
         failed.push({ id: full.id, title: full.title, version: Number(match[1]), reason: String(error?.message ?? error) });
@@ -374,6 +394,17 @@ export default async function ({ execution_id }) {
     }
   } catch (error) {
     failed.push({ reason: String(error?.message ?? error) });
+  }
+  // Read the trash back: proof that what was removed can still be restored.
+  if (deleted.length > 0) {
+    try {
+      const response = await httpClient.send({ url: "/platform/automation/v1/trash/workflows", method: "GET" });
+      const trash = await response.body("json");
+      const ids = new Set((trash.results ?? []).map((entry) => entry.id));
+      for (const entry of deleted) entry.inTrash = ids.has(entry.id);
+    } catch (error) {
+      for (const entry of deleted) entry.inTrash = null;
+    }
   }
   return { deleted, failed };
 }
@@ -414,7 +445,8 @@ const taskDefinitions = (): Record<string, TaskDefinition> => ({
     input: { script: notebookScript() },
     position: { x: 0, y: 13 },
     predecessors: ["email_network_report"],
-    conditions: { states: { email_network_report: "OK" }, custom: `{{ input()["delivery"] == "notebook" }}`, else: "SKIP" },
+    // ANY: the notebook keeps the reports that did come out when a later domain failed.
+    conditions: { states: { email_network_report: "ANY" }, custom: `{{ input()["delivery"] == "notebook" }}`, else: "SKIP" },
   },
 });
 
