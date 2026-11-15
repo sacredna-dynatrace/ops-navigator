@@ -20,6 +20,8 @@ import { answerLanguageLine } from "./problemAnalysis";
  */
 
 /**
+ * v7: corrected cluster and disk queries, values in display units, data rules for the AI, and a
+ * key-actions summary on top (SUMMARY_TASK) - see infraOptimizationQueries.ts and DATA_RULES.
  * v6: email and notebook together ("both", the email links the notebook); Assist's disclaimer is
  * caught in any wording.
  * v5: one email with every report instead of one per domain; the domains chain on their reports.
@@ -29,7 +31,7 @@ import { answerLanguageLine } from "./problemAnalysis";
  * to the trash (CLEANUP_TASK).
  * v2: the notebook's title names the domains it covers, and it gets a description.
  */
-export const INFRA_TEMPLATE_VERSION = 6;
+export const INFRA_TEMPLATE_VERSION = 7;
 export const INFRA_WORKFLOW_TITLE = "[Ops Navigator] Infrastructure Optimization";
 /** Finds every version, v1-v2 titled like Dynatrace's template included; the marker decides. */
 export const INFRA_WORKFLOW_SEARCH = "Infrastructure Optimization";
@@ -37,6 +39,7 @@ export const CLEANUP_TASK = "cleanup_old_versions";
 export const NOTEBOOK_TASK = "publish_notebook";
 export const COMPOSE_EMAIL_TASK = "compose_email";
 export const EMAIL_TASK = "email_report";
+export const SUMMARY_TASK = "summary_prompt";
 /** In the notebook task's script - the intent drops a workflow description - to recognize our workflow. */
 export const INFRA_MARKER_PATTERN = /ops-navigator infra-optimization template v(\d+)/;
 const MARKER = `ops-navigator infra-optimization template v${INFRA_TEMPLATE_VERSION}`;
@@ -128,6 +131,19 @@ export const QUERY_FAILED = "QUERY_FAILED";
 const records = (task: string) => `{{ result("${task}")["records"] | default("${QUERY_FAILED}") }}`;
 /** Tells the AI what QUERY_FAILED means, so it reports the gap instead of inventing findings. */
 const FAILED_LINE = `A data set given as ${QUERY_FAILED} could not be collected - its query failed, typically because that data source is not monitored in this environment. Say so briefly for that part, and do not invent findings for it.`;
+/**
+ * How to read the data, for every report. Without these the 2026-11-15 Kubernetes report (diw85600,
+ * notebook 3976dac3) left most memory cells "-" although every value was there, recommended a 512 MiB
+ * request "increase" for a workload already at 1 GiB, called a workload with 0 throttling "heavily
+ * throttled", and priced an EC2 host whose instance type read "HVM domU".
+ */
+const DATA_RULES = [
+  "Data rules: use only values present in the data, exactly as given - they are already in the unit their field name says (_mcores, _mib, _gib, _percent); do not convert or recompute them. Write '-' only for a value that is null in the data.",
+  "A recommendation must move in the direction of its finding: for INCREASE_* the recommended value is higher than the current one, for REDUCE_* lower.",
+  "Where limit_below_request is true, the limit is a sum over containers some of which set no limit - mention it, but base no limit recommendation on that number.",
+  "Estimate costs only for a recognizable cloud instance type (for example m5.large, e2-standard-4, Standard_D4s_v3); otherwise write that the cost cannot be estimated. State the price basis you assume.",
+  "Do not list items whose finding is NOMINAL; give their count only.",
+].join("\n");
 
 // ---- Tasks ---------------------------------------------------------------------------------------
 
@@ -157,7 +173,7 @@ const query = (name: InfraQueryName, domain: InfraDomain, position: { x: number;
 const prompt = (domain: InfraDomain, position: { x: number; y: number }, text: string, instruction: string, supplementary: string): TaskDefinition => ({
   action: "dynatrace.davis.workflow.actions:prompt-generative-ai",
   description: `Writes the ${DOMAINS[domain].title.English.toLowerCase()} report with Dynatrace generative AI`,
-  input: { config: "disabled", autoTrim: true, prompt: text, instruction: withLanguage(instruction ? `${instruction}\n${FAILED_LINE}` : FAILED_LINE), supplementary },
+  input: { config: "disabled", autoTrim: true, prompt: text, instruction: withLanguage([instruction, DATA_RULES, FAILED_LINE].filter(Boolean).join("\n")), supplementary },
   position,
   predecessors: DOMAINS[domain].queries,
   // ANY: one failed query leaves the report to the others (see records()).
@@ -188,22 +204,18 @@ Goals:
 2. Reduce over-provisioned nodes to save on cost
 3. Increase the size of under-provisioned nodes to reduce risk
 Use the data provided in the context. Findings are already provided for scale; however, still analyze the numbers and produce a recommendation for each example cluster. For instance, you could recommend reducing the number of nodes by 3 or scale down from a \`m7a.2xlarge\` to a \`m7a.large\`.
+A cluster's CPU and memory findings must be read together: a node count or size change has to leave room for both the CPU requests and the memory requests (requests_percent_of_allocatable). Never recommend removing nodes when the remaining allocatable would fall below either one.
 If possible, using the recommendations you generate and the instanceType and cloudType, estimate potential cost savings.
 
 # Golden rules
 1. Always show all of the provided findings in the context
-2. Always show all metrics that were include in the context for each example
+2. Show the metrics that were included in the context for each example
 3. Do not skip examples and always indicate that they are just a small sample of the total findings provided at the end of the report.
-4. Validate your results, using the following method:
-  a. Generate your recommendations
-  b. Pass the recommendations back through LLM, asking it to test for reasonableness
-  c. If it rules that the recommendations are unreasonable, revise and repeat
-  d. Repeat no more than 5 times
+4. Check every recommendation against the numbers before writing it: a recommended request or limit must be consistent with the observed usage and with the finding.
 5. Be sure to include the count of similar findings from the context, when giving the sample recommendations.`;
 
 const K8S_INSTRUCTION = `Be sure the report includes an overview, summary counts, examples, and if possible an estimate of cost savings.
 Format examples in tables instead of bulleted lists.
-Where applicable convert units for readability, e.g. 1000000000 bytes is 1 TiB.
 Where applicable show relative percentages, e.g. 100 used and 1000 allocatable is 10% utilized.`;
 
 const HOST_PROMPT = `Provide a markdown report for the following use case:
@@ -220,7 +232,17 @@ const DISK_PROMPT = `Provide a markdown report for:
 If disk utilization is not optimized, it can result in either wasted spend or worse preventable outages. If the user asked for disk optimization, you should provide two things:
 1. Disks that are overutilized and likely to fill
 2. Disks that are underutilized and will likely never fill, which can safely be shrunken
-Note: disks that are less than 50GiB are not relevant.`;
+Note: disks that are less than 50GiB are not relevant.
+disk_size_gib is the disk's size, used_gib its average use, and never_used_gib the free space it never dipped below in 30 days. A disk can be shrunk by at most never_used_gib minus a safety margin you state; total_never_used_gib is the sum over all under-utilized disks.`;
+
+/** The key-actions summary: read only the finished reports, so it repeats no number they lack. */
+const ANY_SCOPE = INFRA_DOMAINS.map(inScope).join(" or ");
+const reportText = (domain: InfraDomain) => `{{ result("${DOMAINS[domain].prompt}")["text"] | default("NOT_RUN") }}`;
+const SUMMARY_DATA = INFRA_DOMAINS.map((domain) => `## ${DOMAINS[domain].title.English} report\n${reportText(domain)}`).join("\n\n");
+const SUMMARY_PROMPT = `Below are infrastructure optimization reports, one per domain (a report given as NOT_RUN was out of scope or failed - skip it).
+Write the key actions across all of them: 3 to 5 bullet points, the highest risk or the largest saving first. Each bullet names the affected cluster, workload, host or disk and the concrete change, with the number from the report that justifies it.
+Then one line with the total cost impact the reports give, or that none could be estimated.`;
+const SUMMARY_INSTRUCTION = "Start directly with the first bullet - no title, no introduction. Use only facts and numbers that appear in the reports; do not add new findings, and do not repeat a recommendation a report itself marks as not advisable.";
 
 const NETWORK_PROMPT = `Provide a markdown report for:
 ## Identify saturated interfaces
@@ -262,6 +284,7 @@ const TEXT = {
     mailFooterLinked: "Ops Navigator의 Infrastructure Optimization 워크플로가 보낸 메일입니다. 리포트는 Dynatrace 생성형 AI가 작성했습니다. 원본 데이터 쿼리는 위 노트북에서 확인할 수 있습니다.",
     notebook: "노트북",
     notebookLink: "원본 데이터 쿼리와 함께 보기",
+    summary: "## 핵심 요약",
   },
   English: {
     name: "[Infra Optimization] ",
@@ -280,6 +303,7 @@ const TEXT = {
     mailFooterLinked: "Sent by the Infrastructure Optimization workflow of Ops Navigator. The reports are written by Dynatrace generative AI. The raw data queries are in the notebook above.",
     notebook: "Notebook",
     notebookLink: "open with the raw data queries",
+    summary: "## Key actions",
   },
 };
 
@@ -287,8 +311,12 @@ const TEXT = {
 // 공식적으로 영어로만 지원되며 ...", "참고: Dynatrace Assist는 공식적으로 영어만 지원되며 ..."). Any line
 // naming Assist, English and support goes, whatever the order or wording.
 const LANGUAGE_NOTE = /^(?=.*Dynatrace Assist)(?=.*(영어|English))(?=.*(지원|support)).*$|^.*(영어로?만 지원|only (officially )?supported in English).*$/gim;
-// Removing it can leave blank lines and a rule right under the title ("# ...\\n\\n\\n\\n---"); both go.
-const tidy = (report) => report.replace(LANGUAGE_NOTE, "").replace(/\\n{3,}/g, "\\n\\n").replace(/^(#{1,6} [^\\n]*)\\n+---[ \\t]*\\n+/m, "$1\\n\\n").trim();
+// Assist's sign-off when its agentic features are off ("If you want help with creating DQL queries,
+// ask your admin to enable Agentic AI." - end of the disk report, notebook 3976dac3).
+const ASSIST_PROMO = /^.*(enable Agentic AI|Agentic AI(를|을)? 활성화).*$/gim;
+// Removing them can leave blank lines and a rule right under the title ("# ...\\n\\n\\n\\n---"), or a
+// rule left dangling at the end; all go.
+const tidy = (report) => report.replace(LANGUAGE_NOTE, "").replace(ASSIST_PROMO, "").replace(/\\n{3,}/g, "\\n\\n").replace(/^(#{1,6} [^\\n]*)\\n+---[ \\t]*\\n+/m, "$1\\n\\n").replace(/\\n+---[ \\t]*\\s*$/, "").trim();
 
 async function collect(execution_id) {
   const execution = await executionsClient.getExecution({ id: execution_id });
@@ -319,7 +347,16 @@ async function collect(execution_id) {
   const title = text.name + label + " · " + stamp;
   const missing = reports.filter((item) => !item.report).map((item) => item.entry.title[language]);
   const scopeLine = covered.map((entry) => entry.title[language]).join(", ");
-  return { language, text, stamp, covered, reports, title, missing, scopeLine };
+
+  // The key actions across the reports (SUMMARY_TASK), shown on top; none when it did not run.
+  let summary = "";
+  try {
+    const task = await executionsClient.getTaskExecution({ executionId: execution_id, id: "${SUMMARY_TASK}" });
+    summary = tidy(String(task.result?.text ?? ""));
+  } catch (error) {
+    summary = "";
+  }
+  return { language, text, stamp, covered, reports, title, missing, scopeLine, summary };
 }
 `;
 };
@@ -339,9 +376,10 @@ const markdown = (text) => ({ id: newId(), type: "markdown", markdown: text });
 const dql = (title, query) => ({ id: newId(), type: "dql", title, showTitle: true, state: { input: { value: query, timeframe: { from: "now()-2h", to: "now()" } } } });
 
 export default async function ({ execution_id }) {
-  const { language, text, stamp, reports, title, missing, scopeLine } = await collect(execution_id);
+  const { language, text, stamp, reports, title, missing, scopeLine, summary } = await collect(execution_id);
 
   const sections = [markdown(text.heading + "\\n\\n**" + text.createdAt + ":** " + stamp + "  \\n**" + text.scope + ":** " + scopeLine + "\\n\\n" + text.footer)];
+  if (summary) sections.push(markdown(text.summary + "\\n\\n" + summary));
   for (const { entry, report } of reports) {
     // The report brings its own title; the domain heading is only for a missing one.
     sections.push(markdown(report ? report : "## " + entry.title[language] + "\\n\\n" + text.missing));
@@ -370,7 +408,7 @@ import { executionsClient } from "@dynatrace-sdk/client-automation";
 
 ${collectReports()}
 export default async function ({ execution_id }) {
-  const { language, text, stamp, reports, title, missing, scopeLine } = await collect(execution_id);
+  const { language, text, stamp, reports, title, missing, scopeLine, summary } = await collect(execution_id);
   // The notebook this run made, if it made one (delivery: both); skipped or failed -> no link.
   let notebookUrl = null;
   try {
@@ -381,6 +419,7 @@ export default async function ({ execution_id }) {
   }
   const link = notebookUrl ? "  \\n**" + text.notebook + ":** [" + text.notebookLink + "](" + notebookUrl + ")" : "";
   const parts = [text.heading, "**" + text.createdAt + ":** " + stamp + "  \\n**" + text.scope + ":** " + scopeLine + (missing.length > 0 ? "  \\n**" + text.missingList + ":** " + missing.join(", ") : "") + link];
+  if (summary) parts.push(text.summary + "\\n\\n" + summary);
   for (const { entry, report } of reports) {
     parts.push("---");
     parts.push(report ? report : "## " + entry.title[language] + "\\n\\n" + text.missing);
@@ -475,22 +514,32 @@ const taskDefinitions = (): Record<string, TaskDefinition> => ({
   network_updown_interfaces: query("network_updown_interfaces", "network", { x: -1, y: 7 }, "disk_report_prompt"),
   network_saturated_interfaces: query("network_saturated_interfaces", "network", { x: 0, y: 7 }, "disk_report_prompt"),
   network_report_prompt: prompt("network", { x: 0, y: 8 }, NETWORK_PROMPT, "", `{\n  "Saturated interfaces": ${records("network_saturated_interfaces")},\n  "Up/Down interfaces": ${records("network_updown_interfaces")}\n}`),
-  // Delivery: one notebook and/or one email with every report, after the last domain (ANY - the
-  // reports that did come out go out when a later domain failed). The notebook comes first so the
-  // email can link to it.
+  // The key actions across every report, for the top of the notebook and the email (ANY - it sums up
+  // whatever reports did come out).
+  [SUMMARY_TASK]: {
+    action: "dynatrace.davis.workflow.actions:prompt-generative-ai",
+    description: "Sums up the key actions across all reports with Dynatrace generative AI",
+    input: { config: "disabled", autoTrim: true, prompt: SUMMARY_PROMPT, instruction: withLanguage(SUMMARY_INSTRUCTION), supplementary: SUMMARY_DATA },
+    position: { x: 0, y: 9 },
+    predecessors: ["network_report_prompt"],
+    conditions: { states: { network_report_prompt: "ANY" }, custom: `{{ ${ANY_SCOPE} }}`, else: "SKIP" },
+    retry: PROMPT_RETRY,
+  },
+  // Delivery: one notebook and/or one email with every report (ANY - the reports that did come out go
+  // out when a later step failed). The notebook comes first so the email can link to it.
   [NOTEBOOK_TASK]: {
     action: "dynatrace.automations:run-javascript",
     description: "Saves every report of the run, with its queries, as one notebook (delivery: notebook or both)",
     input: { script: notebookScript() },
-    position: { x: 0, y: 9 },
-    predecessors: ["network_report_prompt"],
-    conditions: { states: { network_report_prompt: "ANY" }, custom: `{{ ${BY_NOTEBOOK} }}`, else: "SKIP" },
+    position: { x: 0, y: 10 },
+    predecessors: [SUMMARY_TASK],
+    conditions: { states: { [SUMMARY_TASK]: "ANY" }, custom: `{{ ${BY_NOTEBOOK} }}`, else: "SKIP" },
   },
   [COMPOSE_EMAIL_TASK]: {
     action: "dynatrace.automations:run-javascript",
     description: "Puts every report of the run into one email body, linking the notebook when there is one (delivery: email or both)",
     input: { script: composeEmailScript() },
-    position: { x: 0, y: 10 },
+    position: { x: 0, y: 11 },
     predecessors: [NOTEBOOK_TASK],
     // ANY: a skipped notebook (email only) or a failed one still lets the email go out.
     conditions: { states: { [NOTEBOOK_TASK]: "ANY" }, custom: `{{ ${BY_EMAIL} }}`, else: "SKIP" },
@@ -505,7 +554,7 @@ const taskDefinitions = (): Record<string, TaskDefinition> => ({
       subject: `{{ result("${COMPOSE_EMAIL_TASK}")["subject"] }}`,
       content: `{{ result("${COMPOSE_EMAIL_TASK}")["body"] }}`,
     },
-    position: { x: 0, y: 11 },
+    position: { x: 0, y: 12 },
     predecessors: [COMPOSE_EMAIL_TASK],
     conditions: { states: { [COMPOSE_EMAIL_TASK]: "OK" }, custom: `{{ ${BY_EMAIL} }}`, else: "SKIP" },
   },
