@@ -160,11 +160,15 @@ ui/
     pages/
       BlastRadius.tsx        # "/blast-radius" route (landing page; "/" redirects here) — a Davis problem drawn as rings around its root cause
       Home.tsx               # "/topology" route — topology map
+      Automation.tsx         # "/automation" route (leftmost nav item) — cards that create ready-made workflows
   assets/                    # Static images and SVGs bundled with the app
   app/problemAnalysis.ts     # Analyze-problem prompt (no imports) - shared by the page and the action
 actions/
   build-analysis-prompt.action.ts  # Workflow action: builds the Analyze-problem prompt for a Davis problem
 ui/app/analyzeWorkflow.ts          # Analyze Problem workflows (SRE agent): template, create intent, run event, result
+ui/app/infraOptimizationWorkflow.ts # Infrastructure Optimization Agent template (no SDK imports): email/notebook delivery, Korean/English
+ui/app/infraOptimizationQueries.ts  # Its DQL as generated JSON strings (the queries hold backticks)
+ui/app/automationWorkflows.ts       # Automation page: create intent, finding workflows this app made
 ```
 
 ## ESLint Enforcement

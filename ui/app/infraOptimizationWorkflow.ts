@@ -1,0 +1,368 @@
+import { INFRA_QUERIES, type InfraQueryName } from "./infraOptimizationQueries";
+import { answerLanguageLine } from "./problemAnalysis";
+
+/**
+ * The Infrastructure Optimization Agent workflow, built from Dynatrace's template (host, disk,
+ * Kubernetes and network sizing: Grail queries -> Davis generative AI -> report), with what the
+ * Automation page adds:
+ * - **delivery**: an email per domain (the template's only way) or one notebook with every report and
+ *   the queries behind it;
+ * - **language**: the reports in Korean (default, polite style) or English.
+ * Both live in the workflow input, so they can be changed later in the Workflows app without
+ * recreating the workflow.
+ *
+ * Fixed from the template: the network report was handed the saturated interfaces twice and never the
+ * up/down ones; `k8s_workload_cpu` stopped the whole run (`else: STOP`) when Kubernetes was out of
+ * scope; the Kubernetes raw-data JSON had a stray and a missing comma; two query windows (see
+ * infraOptimizationQueries.ts); the typo'd task name `ks8_report_prompt`.
+ *
+ * No SDK imports: the page and a plain Node script (to try the template with dtctl) both build it.
+ */
+
+export const INFRA_TEMPLATE_VERSION = 1;
+export const INFRA_WORKFLOW_TITLE = "Infrastructure Optimization Agent";
+export const NOTEBOOK_TASK = "publish_notebook";
+/** In the notebook task's script - the intent drops a workflow description - to recognize our workflow. */
+export const INFRA_MARKER_PATTERN = /ops-navigator infra-optimization template v(\d+)/;
+const MARKER = `ops-navigator infra-optimization template v${INFRA_TEMPLATE_VERSION}`;
+
+export type InfraDomain = "kubernetes" | "host" | "disk" | "network";
+export type InfraDelivery = "email" | "notebook";
+export type InfraLanguage = "Korean" | "English";
+export type InfraOptimizationInput = {
+  scope: Record<InfraDomain, boolean>;
+  delivery: InfraDelivery;
+  language: InfraLanguage;
+  emails: { to: string[]; cc: string[]; bcc: string[] };
+};
+
+export const INFRA_DOMAINS: InfraDomain[] = ["kubernetes", "host", "disk", "network"];
+
+export const DEFAULT_INFRA_INPUT: InfraOptimizationInput = {
+  // Network needs the network-device extension; most tenants do not monitor it.
+  scope: { kubernetes: true, host: true, disk: true, network: false },
+  delivery: "email",
+  language: "Korean",
+  emails: { to: [], cc: [], bcc: [] },
+};
+
+/** What each domain queries and which prompt task writes its report. */
+const DOMAINS: Record<InfraDomain, { prompt: string; email: string; queries: InfraQueryName[]; title: Record<InfraLanguage, string>; subject: Record<InfraLanguage, string> }> = {
+  kubernetes: {
+    prompt: "k8s_report_prompt",
+    email: "email_k8s_report",
+    queries: ["k8s_cluster_cpu", "k8s_cluster_memory", "k8s_workload_cpu", "k8s_workload_memory"],
+    title: { Korean: "Kubernetes 최적화", English: "Kubernetes optimization" },
+    subject: { Korean: "Kubernetes 최적화 리포트", English: "K8s Optimization Report" },
+  },
+  host: {
+    prompt: "host_report_prompt",
+    email: "email_host_report",
+    queries: ["host_utilization"],
+    title: { Korean: "호스트 최적화", English: "Host optimization" },
+    subject: { Korean: "호스트 최적화 리포트", English: "Host Optimization Report" },
+  },
+  disk: {
+    prompt: "disk_report_prompt",
+    email: "email_disk_report",
+    queries: ["disk_overutilized", "disk_underutilized"],
+    title: { Korean: "디스크 최적화", English: "Disk optimization" },
+    subject: { Korean: "디스크 최적화 리포트", English: "Disk Optimization Report" },
+  },
+  network: {
+    prompt: "network_report_prompt",
+    email: "email_network_report",
+    queries: ["network_saturated_interfaces", "network_updown_interfaces"],
+    title: { Korean: "네트워크 최적화", English: "Network optimization" },
+    subject: { Korean: "네트워크 최적화 리포트", English: "Network Optimization Report" },
+  },
+};
+
+const QUERY_TITLES: Record<InfraQueryName, Record<InfraLanguage, string>> = {
+  k8s_cluster_cpu: { Korean: "클러스터 CPU (7일 p95)", English: "Cluster CPU (7-day p95)" },
+  k8s_cluster_memory: { Korean: "클러스터 메모리 (7일 p95)", English: "Cluster memory (7-day p95)" },
+  k8s_workload_cpu: { Korean: "워크로드 CPU (7일 p95)", English: "Workload CPU (7-day p95)" },
+  k8s_workload_memory: { Korean: "워크로드 메모리 (7일 p95)", English: "Workload memory (7-day p95)" },
+  host_utilization: { Korean: "호스트 사용률 (30일 p90)", English: "Host utilization (30-day p90)" },
+  disk_overutilized: { Korean: "과다 사용 디스크 (30일, 95% 초과)", English: "Over-utilized disks (30 days, > 95%)" },
+  disk_underutilized: { Korean: "과소 사용 디스크 (30일, 50% 미만)", English: "Under-utilized disks (30 days, < 50%)" },
+  network_saturated_interfaces: { Korean: "포화 인터페이스 (85% 이상)", English: "Saturated interfaces (>= 85%)" },
+  network_updown_interfaces: { Korean: "Up/Down 인터페이스", English: "Up/down interfaces" },
+};
+
+// ---- Expressions ---------------------------------------------------------------------------------
+
+const inScope = (domain: InfraDomain) => `input()["scope"]["${domain}"]`;
+const BY_EMAIL = `input()["delivery"] == "email"`;
+const IS_ENGLISH = `input()["language"] == "English"`;
+/** A Jinja string literal; the texts here hold no double quotes, this guards that. */
+const literal = (text: string) => {
+  if (text.includes('"') || text.includes("{{") || text.includes("\\")) throw new Error(`Not usable in an expression: ${text}`);
+  return `"${text}"`;
+};
+/** Korean unless the workflow input says English - Korean is the default and the fallback. */
+const byLanguage = (korean: string, english: string) => `{{ ${literal(english)} if ${IS_ENGLISH} else ${literal(korean)} }}`;
+/**
+ * The shared polite-style line, with table cells let off: held to it, the host report's cells read
+ * "적절한 리소스 할당 확인합니다" (diw85600, first test run).
+ */
+const KOREAN_LINE = answerLanguageLine("Korean").replace("every sentence, list item and table cell ends", "every sentence and list item ends").replace("headings and labels may stay", "headings, labels and table cells may stay");
+const LANGUAGE_LINE = byLanguage(KOREAN_LINE, answerLanguageLine("English"));
+const withLanguage = (instruction: string) => (instruction ? `${instruction}\n${LANGUAGE_LINE}` : LANGUAGE_LINE);
+
+const records = (task: string, json = false) => `{{ result("${task}")["records"]${json ? " | to_json()" : ""} }}`;
+
+// ---- Tasks ---------------------------------------------------------------------------------------
+
+type Conditions = { states: Record<string, string>; custom?: string; else?: string };
+type TaskDefinition = {
+  action: string;
+  description: string;
+  input: Record<string, unknown>;
+  position: { x: number; y: number };
+  predecessors: string[];
+  conditions: Conditions;
+  retry?: Record<string, unknown>;
+};
+
+const PROMPT_RETRY = { count: 2, delay: 30, failedLoopIterationsOnly: true };
+
+const query = (name: InfraQueryName, domain: InfraDomain, position: { x: number; y: number }, after?: string): TaskDefinition => ({
+  action: "dynatrace.automations:execute-dql-query",
+  description: QUERY_TITLES[name].English,
+  input: { query: INFRA_QUERIES[name] },
+  position,
+  predecessors: after ? [after] : [],
+  conditions: { states: after ? { [after]: "OK" } : {}, custom: `{{ ${inScope(domain)} }}`, else: "SKIP" },
+});
+
+const prompt = (domain: InfraDomain, position: { x: number; y: number }, text: string, instruction: string, supplementary: string): TaskDefinition => ({
+  action: "dynatrace.davis.workflow.actions:prompt-generative-ai",
+  description: `Writes the ${DOMAINS[domain].title.English.toLowerCase()} report with Dynatrace generative AI`,
+  input: { config: "disabled", autoTrim: true, prompt: text, instruction: withLanguage(instruction), supplementary },
+  position,
+  predecessors: DOMAINS[domain].queries,
+  conditions: { states: Object.fromEntries(DOMAINS[domain].queries.map((name) => [name, "OK"])), custom: `{{ ${inScope(domain)} }}`, else: "SKIP" },
+  retry: PROMPT_RETRY,
+});
+
+const email = (domain: InfraDomain, position: { x: number; y: number }, extra = ""): TaskDefinition => ({
+  action: "dynatrace.email:send-email",
+  description: `Emails the ${DOMAINS[domain].title.English.toLowerCase()} report (delivery: email)`,
+  input: {
+    to: ['{{ input()["emails"]["to"] }}'],
+    cc: ['{{ input()["emails"]["cc"] }}'],
+    bcc: ['{{ input()["emails"]["bcc"] }}'],
+    subject: byLanguage(DOMAINS[domain].subject.Korean, DOMAINS[domain].subject.English),
+    content: `${byLanguage("AI 생성 리포트:", "AI generated report:")}\n{{ result("${DOMAINS[domain].prompt}")["text"] }}${extra}`,
+  },
+  position,
+  predecessors: [DOMAINS[domain].prompt],
+  conditions: { states: { [DOMAINS[domain].prompt]: "OK" }, custom: `{{ ${inScope(domain)} and ${BY_EMAIL} }}`, else: "SKIP" },
+});
+
+const K8S_DATA = (json: boolean) => `{
+  "Cluster optimization": {
+    "CPU": ${records("k8s_cluster_cpu", json)},
+    "Memory": ${records("k8s_cluster_memory", json)}
+  },
+  "Workload optimization": {
+    "CPU": ${records("k8s_workload_cpu", json)},
+    "Memory": ${records("k8s_workload_memory", json)}
+  }
+}`;
+
+const K8S_PROMPT = `Provide a \`Kubernetes Optimization Report\`, in markdown for these 2 usecases:
+
+# 1. Optimize pod sizing
+Goal: identify pod optimization opportunities and recommend Kubernetes pod \`requests\` and \`limits\` for CPU and memory that reduce OOMKills/throttling while avoiding wasted reserved capacity.
+Use the data provided in the context. Findings are already provided for scale; however, still analyze the numbers and produce a recommendation for \`requests\` and \`limits\` for each example, if appropriate.
+
+# 2. Optimize cluster sizing
+Goals:
+1. Shutdown unneeded nodes to save on cost, assuming Pods have already been optimized above.
+2. Reduce over-provisioned nodes to save on cost
+3. Increase the size of under-provisioned nodes to reduce risk
+Use the data provided in the context. Findings are already provided for scale; however, still analyze the numbers and produce a recommendation for each example cluster. For instance, you could recommend reducing the number of nodes by 3 or scale down from a \`m7a.2xlarge\` to a \`m7a.large\`.
+If possible, using the recommendations you generate and the instanceType and cloudType, estimate potential cost savings.
+
+# Golden rules
+1. Always show all of the provided findings in the context
+2. Always show all metrics that were include in the context for each example
+3. Do not skip examples and always indicate that they are just a small sample of the total findings provided at the end of the report.
+4. Validate your results, using the following method:
+  a. Generate your recommendations
+  b. Pass the recommendations back through LLM, asking it to test for reasonableness
+  c. If it rules that the recommendations are unreasonable, revise and repeat
+  d. Repeat no more than 5 times
+5. Be sure to include the count of similar findings from the context, when giving the sample recommendations.`;
+
+const K8S_INSTRUCTION = `Be sure the report includes an overview, summary counts, examples, and if possible an estimate of cost savings.
+Format examples in tables instead of bulleted lists.
+Where applicable convert units for readability, e.g. 1000000000 bytes is 1 TiB.
+Where applicable show relative percentages, e.g. 100 used and 1000 allocatable is 10% utilized.`;
+
+const HOST_PROMPT = `Provide a markdown report for the following use case:
+## Optimize host sizing
+If a user wants to optimize the size of their hosts, they generally have three goals:
+1. Shutdown potentially unused hosts
+2. Reduce over-provisioned hosts to save on cost
+3. Increase the size of under-provisioned hosts to reduce risk
+
+Be sure to provide an overview (including number of hosts per utilization) and any insights from the data provided. If possible give an estimated range of cost savings.`;
+
+const DISK_PROMPT = `Provide a markdown report for:
+## Optimize disk usage
+If disk utilization is not optimized, it can result in either wasted spend or worse preventable outages. If the user asked for disk optimization, you should provide two things:
+1. Disks that are overutilized and likely to fill
+2. Disks that are underutilized and will likely never fill, which can safely be shrunken
+Note: disks that are less than 50GiB are not relevant.`;
+
+const NETWORK_PROMPT = `Provide a markdown report for:
+## Identify saturated interfaces
+Saturated interfaces could cause network slowdowns and require either upgrades or rerouting traffic.
+
+## Identify up/down interfaces
+Network admininstrators refer to interfaces as "up/down", when the administrative status is "up" but the operational status is "down". Sometimes this is normal, e.g. a port for a user's computer is down; however, many times this can also mean that a port that is intended to be up is for some reason down, perhaps due to a cable or NIC issue.`;
+
+/** The notebook: title and scope, each report, then the queries behind it to rerun. */
+const notebookScript = () => {
+  const domains = INFRA_DOMAINS.map((domain) => ({
+    domain,
+    task: DOMAINS[domain].prompt,
+    title: DOMAINS[domain].title,
+    queries: DOMAINS[domain].queries.map((name) => ({ title: QUERY_TITLES[name], query: INFRA_QUERIES[name] })),
+  }));
+  return `// ${MARKER}
+import { executionsClient } from "@dynatrace-sdk/client-automation";
+import { documentsClient } from "@dynatrace-sdk/client-document";
+import { getEnvironmentUrl } from "@dynatrace-sdk/app-environment";
+
+// One notebook with every report of this run and the queries behind it (delivery: notebook).
+const DOMAINS = ${JSON.stringify(domains, null, 2)};
+
+const TEXT = {
+  Korean: {
+    name: "[인프라 최적화 리포트] ",
+    heading: "# 인프라 최적화 리포트",
+    created: "생성 시각",
+    scope: "분석 범위",
+    missing: "_이 영역의 리포트가 생성되지 않았습니다._",
+    data: "원본 데이터 쿼리",
+    footer: "Ops Navigator의 Infrastructure Optimization Agent 워크플로가 생성했습니다. 리포트는 Dynatrace 생성형 AI가 작성했으며, 아래 쿼리로 원본 데이터를 다시 확인할 수 있습니다.",
+  },
+  English: {
+    name: "[Infrastructure Optimization] ",
+    heading: "# Infrastructure optimization report",
+    created: "Created",
+    scope: "Scope",
+    missing: "_No report was produced for this domain._",
+    data: "Raw data queries",
+    footer: "Created by the Infrastructure Optimization Agent workflow of Ops Navigator. The reports are written by Dynatrace generative AI; the queries below show the data behind them.",
+  },
+};
+
+// Section ids only need to be unique within the notebook.
+let sectionCount = 0;
+const newId = () => "section-" + String(++sectionCount);
+const markdown = (text) => ({ id: newId(), type: "markdown", markdown: text });
+// Assist appends this to non-English answers ("Dynatrace Assist는 공식적으로 영어로만 지원되며 ...").
+const LANGUAGE_NOTE = /^.*(영어로만 지원|only (officially )?supported in English).*$/gm;
+const tidy = (report) => report.replace(LANGUAGE_NOTE, "").trim();
+const dql = (title, query) => ({ id: newId(), type: "dql", title, showTitle: true, state: { input: { value: query, timeframe: { from: "now()-2h", to: "now()" } } } });
+
+export default async function ({ execution_id }) {
+  const execution = await executionsClient.getExecution({ id: execution_id });
+  const input = execution.input ?? {};
+  const language = input.language === "English" ? "English" : "Korean";
+  const text = TEXT[language];
+  const scope = input.scope ?? {};
+  // Korea time, written out by hand: the runtime's Intl time zones are not guaranteed.
+  const stamp = new Date(Date.now() + 9 * 3600 * 1000).toISOString().slice(0, 16).replace("T", " ") + " KST";
+
+  const covered = DOMAINS.filter((entry) => scope[entry.domain] === true);
+  const sections = [markdown(text.heading + "\\n\\n**" + text.created + ":** " + stamp + "  \\n**" + text.scope + ":** " + covered.map((entry) => entry.title[language]).join(", ") + "\\n\\n" + text.footer)];
+  for (const entry of covered) {
+    let report = "";
+    try {
+      const task = await executionsClient.getTaskExecution({ executionId: execution_id, id: entry.task });
+      report = tidy(String(task.result?.text ?? ""));
+    } catch (error) {
+      report = "";
+    }
+    // The report brings its own title; the domain heading is only for a missing one.
+    sections.push(markdown(report ? report : "## " + entry.title[language] + "\\n\\n" + text.missing));
+    sections.push(markdown("#### " + entry.title[language] + " - " + text.data));
+    for (const item of entry.queries) sections.push(dql(item.title[language], item.query));
+  }
+
+  const name = text.name + stamp;
+  const content = { version: "7", defaultTimeframe: { from: "now()-2h", to: "now()" }, sections };
+  const document = await documentsClient.createDocument({
+    body: { name, type: "notebook", content: new Blob([JSON.stringify(content)], { type: "application/json" }) },
+  });
+  const url = getEnvironmentUrl().replace(/\\/$/, "") + "/ui/apps/dynatrace.notebooks/notebook/" + document.id;
+  return { notebookId: document.id, name, url };
+}
+`;
+};
+
+const taskDefinitions = (): Record<string, TaskDefinition> => ({
+  // Kubernetes - the four queries run side by side.
+  k8s_cluster_cpu: query("k8s_cluster_cpu", "kubernetes", { x: -2, y: 1 }),
+  k8s_cluster_memory: query("k8s_cluster_memory", "kubernetes", { x: -1, y: 1 }),
+  k8s_workload_cpu: query("k8s_workload_cpu", "kubernetes", { x: 1, y: 1 }),
+  k8s_workload_memory: query("k8s_workload_memory", "kubernetes", { x: 2, y: 1 }),
+  k8s_report_prompt: prompt("kubernetes", { x: 0, y: 2 }, K8S_PROMPT, K8S_INSTRUCTION, K8S_DATA(false)),
+  email_k8s_report: email("kubernetes", { x: 0, y: 3 }, `\n\n-----\n\n# Raw data\n\`\`\`json\n${K8S_DATA(true)}\n\`\`\``),
+  // The domains run one after another, as in the template: each waits for the one before (a skipped
+  // task counts as OK, so a domain out of scope does not hold the next one back).
+  host_utilization: query("host_utilization", "host", { x: -1, y: 4 }, "email_k8s_report"),
+  host_report_prompt: prompt("host", { x: 0, y: 5 }, HOST_PROMPT, "Instead of bulleted list, format example hosts in a table.", `Use this analysis of p90 CPU and Memory for the past 30 days:\n${records("host_utilization")}`),
+  email_host_report: email("host", { x: 0, y: 6 }),
+  disk_overutilized: query("disk_overutilized", "disk", { x: -1, y: 7 }, "email_host_report"),
+  disk_underutilized: query("disk_underutilized", "disk", { x: 0, y: 7 }, "email_host_report"),
+  disk_report_prompt: prompt("disk", { x: 0, y: 8 }, DISK_PROMPT, "", `{\n  "Overutilized disks": ${records("disk_overutilized")},\n  "Underutilized disks": ${records("disk_underutilized")}\n}`),
+  email_disk_report: email("disk", { x: 0, y: 9 }),
+  network_updown_interfaces: query("network_updown_interfaces", "network", { x: -1, y: 10 }, "email_disk_report"),
+  network_saturated_interfaces: query("network_saturated_interfaces", "network", { x: 0, y: 10 }, "email_disk_report"),
+  network_report_prompt: prompt("network", { x: 0, y: 11 }, NETWORK_PROMPT, "", `{\n  "Saturated interfaces": ${records("network_saturated_interfaces")},\n  "Up/Down interfaces": ${records("network_updown_interfaces")}\n}`),
+  email_network_report: email("network", { x: 0, y: 12 }),
+  [NOTEBOOK_TASK]: {
+    action: "dynatrace.automations:run-javascript",
+    description: "Saves every report of the run, with its queries, as one notebook (delivery: notebook)",
+    input: { script: notebookScript() },
+    position: { x: 0, y: 13 },
+    predecessors: ["email_network_report"],
+    conditions: { states: { email_network_report: "OK" }, custom: `{{ input()["delivery"] == "notebook" }}`, else: "SKIP" },
+  },
+});
+
+/**
+ * The tasks, each carrying its own key as `name`: the Workflows app's create-workflow intent opens an
+ * empty editor without it (see analyzeWorkflow.ts).
+ */
+export const infraOptimizationTasks = () =>
+  Object.fromEntries(Object.entries(taskDefinitions()).map(([name, task]) => [name, { name, ...task }]));
+
+/**
+ * The workflow as the create-workflow intent takes it. Manual trigger: the user tries a run, then
+ * sets a schedule. Private, like the template - the user can share it from the Workflows app.
+ */
+export const infraOptimizationWorkflow = (input: InfraOptimizationInput) => ({
+  title: INFRA_WORKFLOW_TITLE,
+  type: "STANDARD" as const,
+  isPrivate: true,
+  hourlyExecutionLimit: 10,
+  input,
+  tasks: infraOptimizationTasks(),
+});
+
+/** Splits a typed recipient list ("a@x.com, b@y.com"). */
+export const parseRecipients = (text: string) =>
+  text
+    .split(/[\s,;]+/)
+    .map((item) => item.trim())
+    .filter((item) => item.length > 0);
+
+export const isEmailAddress = (text: string) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(text);

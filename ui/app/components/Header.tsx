@@ -11,6 +11,9 @@ export const Header = () => {
     <AppHeader>
       <AppHeader.Navigation>
         <AppHeader.Logo as={Link} to="/blast-radius" />
+        <AppHeader.NavigationItem as={Link} to="/automation">
+          Automation
+        </AppHeader.NavigationItem>
         <AppHeader.NavigationItem as={Link} to="/blast-radius">
           Blast radius
         </AppHeader.NavigationItem>

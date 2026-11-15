@@ -5,6 +5,7 @@ import { Navigate, Route, Routes } from "react-router-dom";
 import { Header } from "./components/Header";
 import { SegmentQueryScope } from "./components/SegmentQueryScope";
 import { TagFilterProvider } from "./components/SharedFilters";
+import { Automation } from "./pages/Automation";
 import { BlastRadius } from "./pages/BlastRadius";
 import { Home } from "./pages/Home";
 import { Starfield } from "./pages/Starfield";
@@ -25,6 +26,7 @@ export const App = () => {
                 {/* Blast radius is the landing page: problem, impact and analysis in one place. "/" used
                     to be the topology map; old links to it now land here. */}
                 <Route path="/" element={<Navigate to="/blast-radius" replace />} />
+                <Route path="/automation" element={<Automation />} />
                 <Route path="/blast-radius" element={<BlastRadius />} />
                 <Route path="/topology" element={<Home />} />
                 <Route path="/starfield" element={<Starfield />} />
