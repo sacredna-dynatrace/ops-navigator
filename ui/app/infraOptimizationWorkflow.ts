@@ -115,12 +115,8 @@ const literal = (text: string) => {
 };
 /** Korean unless the workflow input says English - Korean is the default and the fallback. */
 const byLanguage = (korean: string, english: string) => `{{ ${literal(english)} if ${IS_ENGLISH} else ${literal(korean)} }}`;
-/**
- * The shared polite-style line, with table cells let off: held to it, the host report's cells read
- * "적절한 리소스 할당 확인합니다" (diw85600, first test run).
- */
-const KOREAN_LINE = answerLanguageLine("Korean").replace("every sentence, list item and table cell ends", "every sentence and list item ends").replace("headings and labels may stay", "headings, labels and table cells may stay");
-const LANGUAGE_LINE = byLanguage(KOREAN_LINE, answerLanguageLine("English"));
+/** The shared polite-style line; it lets table cells off since this workflow's first test run. */
+const LANGUAGE_LINE = byLanguage(answerLanguageLine("Korean"), answerLanguageLine("English"));
 const withLanguage = (instruction: string) => (instruction ? `${instruction}\n${LANGUAGE_LINE}` : LANGUAGE_LINE);
 
 /**

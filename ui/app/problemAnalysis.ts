@@ -303,11 +303,13 @@ export const linkifyEntities = (text: string, environmentUrl: string): string =>
  * "확인해야 한다", "필요하다") in Assist and SRE agent reports alike, which reads as curt in a report
  * handed to an operator; "Answer in Korean." says nothing about register, so the line asks for the
  * polite formal style everywhere - list items included, where the plain style showed up most.
+ * Table cells are let off: held to it, cells read "1건 확인합니다" (SRE agent, P-2611729) and
+ * "적절한 리소스 할당 확인합니다" (Infrastructure Optimization), so values and short phrases stay bare.
  */
 export const answerLanguageLine = (language: string | null): string => {
   if (!language) return "";
   if (language !== "Korean") return `Answer in ${language}.`;
-  return "Answer in Korean, in the polite formal style (합니다/습니다체) throughout: every sentence, list item and table cell ends like '확인합니다', '필요합니다', '권장합니다'. Never use the plain style (한다/이다체) such as '확인해야 한다', '필요하다', '권장한다'. Short noun-phrase headings and labels may stay as they are.";
+  return "Answer in Korean, in the polite formal style (합니다/습니다체) throughout: every sentence and list item ends like '확인합니다', '필요합니다', '권장합니다'. Never use the plain style (한다/이다체) such as '확인해야 한다', '필요하다', '권장한다'. Table cells hold values or short noun phrases such as '5건', '정상', '메모리 부족' - do not add '확인합니다' or other verbs to them. Short noun-phrase headings and labels may also stay as they are.";
 };
 
 export const explainPrompt = (problem: AnalysisProblem, language: string | null, scope: LogScope, zone: string | null, environmentUrl: string | null = null): string => {

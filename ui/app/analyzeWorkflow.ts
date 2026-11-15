@@ -21,7 +21,7 @@ import { linkifyEntities } from "./problemAnalysis";
  */
 
 /** Bump when the tasks change; the settings sheet then offers to create the new version. */
-export const TEMPLATE_VERSION = 6;
+export const TEMPLATE_VERSION = 7;
 export type WorkflowKind = "auto" | "onDemand";
 export const WORKFLOW_TITLES: Record<WorkflowKind, string> = {
   auto: "Analyze Problem (auto)",
@@ -81,13 +81,18 @@ export default async function ({ execution_id }) {
 /**
  * Drops the lead-in an agent writes before its report ("Now I have all the key evidence I need. Let
  * me compile the final report.") - asked not to, it still did on P-2611383 and P-2611388. Keeps
- * everything from the first heading, rule or bold line when that comes within the first five lines,
- * then any blank or rule lines left on top. CLEAN_SCRIPT runs the same rule in the workflow.
+ * everything from the Verdict heading when there is one - the prompt asks the report to open with it,
+ * and on P-2611499 the agent put 20 lines of working notes ("**데이터 정리 ...**") before it, which
+ * the five-line rule below let through because they started with a bold line. Without a Verdict
+ * heading: everything from the first heading, rule or bold line when that comes within the first five
+ * lines. Then any blank or rule lines left on top go. CLEAN_SCRIPT runs the same rule in the workflow.
  */
+export const VERDICT_HEADING = /^\s*#{1,6}\s.*(판정|verdict)/i;
 export const cleanReport = (text: string): string => {
   const lines = text.split("\n");
+  const verdict = lines.findIndex((line) => VERDICT_HEADING.test(line));
   const first = lines.findIndex((line) => /^\s*(#{1,6}\s|---\s*$|\*\*)/.test(line));
-  let kept = first > 0 && first <= 5 ? lines.slice(first) : lines;
+  let kept = verdict > 0 ? lines.slice(verdict) : first > 0 && first <= 5 ? lines.slice(first) : lines;
   while (kept.length > 0 && /^\s*(---)?\s*$/.test(kept[0])) kept = kept.slice(1);
   return kept.join("\n");
 };
@@ -106,8 +111,9 @@ const LINKABLE_ID = /(?:\/ui\/entity\/)?\b((?:SERVICE|HOST)-[0-9A-F]{16})\b/g;
 
 const clean = (text) => {
   const lines = text.split("\n");
+  const verdict = lines.findIndex((line) => /^\s*#{1,6}\s.*(판정|verdict)/i.test(line));
   const first = lines.findIndex((line) => /^\s*(#{1,6}\s|---\s*$|\*\*)/.test(line));
-  let kept = first > 0 && first <= 5 ? lines.slice(first) : lines;
+  let kept = verdict > 0 ? lines.slice(verdict) : first > 0 && first <= 5 ? lines.slice(first) : lines;
   while (kept.length > 0 && /^\s*(---)?\s*$/.test(kept[0])) kept = kept.slice(1);
   return kept.join("\n");
 };
