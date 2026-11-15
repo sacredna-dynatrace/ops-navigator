@@ -20,6 +20,8 @@ import { answerLanguageLine } from "./problemAnalysis";
  */
 
 /**
+ * v16: cleanup_old_versions moves to its own spot - v15 put k8s_rightsizing on it, and the Workflows
+ * app refused to save the workflow.
  * v15: one node finding per cluster (no memory-only scale-down), host groups with their ranges and
  * Kubernetes nodes per cluster, a new k8s_rightsizing query (requests and nodes after rightsizing,
  * and how much of the requests the advice covers), and fixed wording for workload counts.
@@ -54,7 +56,7 @@ import { answerLanguageLine } from "./problemAnalysis";
  * to the trash (CLEANUP_TASK).
  * v2: the notebook's title names the domains it covers, and it gets a description.
  */
-export const INFRA_TEMPLATE_VERSION = 15;
+export const INFRA_TEMPLATE_VERSION = 16;
 export const INFRA_WORKFLOW_TITLE = "[Ops Navigator] Infrastructure Optimization";
 /** Finds every version, v1-v2 titled like Dynatrace's template included; the marker decides. */
 export const INFRA_WORKFLOW_SEARCH = "Infrastructure Optimization";
@@ -1066,11 +1068,12 @@ const taskDefinitions = (): Record<string, TaskDefinition> => ({
     action: "dynatrace.automations:run-javascript",
     description: "Moves older versions of this workflow made by Ops Navigator to the trash",
     input: { script: cleanupScript() },
-    position: { x: 3, y: 1 },
+    // Right of the Kubernetes queries: two tasks on one spot make the workflow invalid to save.
+    position: { x: 4, y: 1 },
     predecessors: [],
     conditions: { states: {} },
   },
-  // Kubernetes - the four queries run side by side.
+  // Kubernetes - the five queries run side by side.
   k8s_cluster_cpu: query("k8s_cluster_cpu", "kubernetes", { x: -2, y: 1 }),
   k8s_cluster_memory: query("k8s_cluster_memory", "kubernetes", { x: -1, y: 1 }),
   k8s_workload_cpu: query("k8s_workload_cpu", "kubernetes", { x: 1, y: 1 }),
@@ -1137,8 +1140,19 @@ const taskDefinitions = (): Record<string, TaskDefinition> => ({
  * The tasks, each carrying its own key as `name`: the Workflows app's create-workflow intent opens an
  * empty editor without it (see analyzeWorkflow.ts).
  */
-export const infraOptimizationTasks = () =>
-  Object.fromEntries(Object.entries(taskDefinitions()).map(([name, task]) => [name, { name, ...task }]));
+export const infraOptimizationTasks = () => {
+  const definitions = taskDefinitions();
+  // The Workflows app refuses to save a workflow with two tasks on one position ("invalid
+  // configuration in task ...") - v15 put k8s_rightsizing on cleanup_old_versions' spot.
+  const taken = new Map<string, string>();
+  for (const [name, task] of Object.entries(definitions)) {
+    const spot = `${task.position.x},${task.position.y}`;
+    const other = taken.get(spot);
+    if (other) throw new Error(`Tasks ${other} and ${name} share position ${spot}`);
+    taken.set(spot, name);
+  }
+  return Object.fromEntries(Object.entries(definitions).map(([name, task]) => [name, { name, ...task }]));
+};
 
 /**
  * The workflow as the create-workflow intent takes it. Manual trigger: the user tries a run, then
