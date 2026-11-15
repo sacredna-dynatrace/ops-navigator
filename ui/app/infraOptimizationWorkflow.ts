@@ -19,7 +19,8 @@ import { answerLanguageLine } from "./problemAnalysis";
  * No SDK imports: the page and a plain Node script (to try the template with dtctl) both build it.
  */
 
-export const INFRA_TEMPLATE_VERSION = 1;
+/** v2: the notebook's title names the domains it covers, and it gets a description. */
+export const INFRA_TEMPLATE_VERSION = 2;
 export const INFRA_WORKFLOW_TITLE = "Infrastructure Optimization Agent";
 export const NOTEBOOK_TASK = "publish_notebook";
 /** In the notebook task's script - the intent drops a workflow description - to recognize our workflow. */
@@ -47,12 +48,13 @@ export const DEFAULT_INFRA_INPUT: InfraOptimizationInput = {
 };
 
 /** What each domain queries and which prompt task writes its report. */
-const DOMAINS: Record<InfraDomain, { prompt: string; email: string; queries: InfraQueryName[]; title: Record<InfraLanguage, string>; subject: Record<InfraLanguage, string> }> = {
+const DOMAINS: Record<InfraDomain, { prompt: string; email: string; queries: InfraQueryName[]; title: Record<InfraLanguage, string>; short: Record<InfraLanguage, string>; subject: Record<InfraLanguage, string> }> = {
   kubernetes: {
     prompt: "k8s_report_prompt",
     email: "email_k8s_report",
     queries: ["k8s_cluster_cpu", "k8s_cluster_memory", "k8s_workload_cpu", "k8s_workload_memory"],
     title: { Korean: "Kubernetes 최적화", English: "Kubernetes optimization" },
+    short: { Korean: "K8s", English: "K8s" },
     subject: { Korean: "Kubernetes 최적화 리포트", English: "K8s Optimization Report" },
   },
   host: {
@@ -60,6 +62,7 @@ const DOMAINS: Record<InfraDomain, { prompt: string; email: string; queries: Inf
     email: "email_host_report",
     queries: ["host_utilization"],
     title: { Korean: "호스트 최적화", English: "Host optimization" },
+    short: { Korean: "호스트", English: "Host" },
     subject: { Korean: "호스트 최적화 리포트", English: "Host Optimization Report" },
   },
   disk: {
@@ -67,6 +70,7 @@ const DOMAINS: Record<InfraDomain, { prompt: string; email: string; queries: Inf
     email: "email_disk_report",
     queries: ["disk_overutilized", "disk_underutilized"],
     title: { Korean: "디스크 최적화", English: "Disk optimization" },
+    short: { Korean: "디스크", English: "Disk" },
     subject: { Korean: "디스크 최적화 리포트", English: "Disk Optimization Report" },
   },
   network: {
@@ -74,6 +78,7 @@ const DOMAINS: Record<InfraDomain, { prompt: string; email: string; queries: Inf
     email: "email_network_report",
     queries: ["network_saturated_interfaces", "network_updown_interfaces"],
     title: { Korean: "네트워크 최적화", English: "Network optimization" },
+    short: { Korean: "네트워크", English: "Network" },
     subject: { Korean: "네트워크 최적화 리포트", English: "Network Optimization Report" },
   },
 };
@@ -231,6 +236,7 @@ const notebookScript = () => {
     domain,
     task: DOMAINS[domain].prompt,
     title: DOMAINS[domain].title,
+    short: DOMAINS[domain].short,
     queries: DOMAINS[domain].queries.map((name) => ({ title: QUERY_TITLES[name], query: INFRA_QUERIES[name] })),
   }));
   return `// ${MARKER}
@@ -243,18 +249,26 @@ const DOMAINS = ${JSON.stringify(domains, null, 2)};
 
 const TEXT = {
   Korean: {
-    name: "[인프라 최적화 리포트] ",
+    name: "[인프라 최적화] ",
+    all: "전체",
+    none: "리포트 없음",
+    created: "생성",
+    by: "Ops Navigator · Infrastructure Optimization Agent",
     heading: "# 인프라 최적화 리포트",
-    created: "생성 시각",
+    createdAt: "생성 시각",
     scope: "분석 범위",
     missing: "_이 영역의 리포트가 생성되지 않았습니다._",
     data: "원본 데이터 쿼리",
     footer: "Ops Navigator의 Infrastructure Optimization Agent 워크플로가 생성했습니다. 리포트는 Dynatrace 생성형 AI가 작성했으며, 아래 쿼리로 원본 데이터를 다시 확인할 수 있습니다.",
   },
   English: {
-    name: "[Infrastructure Optimization] ",
-    heading: "# Infrastructure optimization report",
+    name: "[Infra Optimization] ",
+    all: "All",
+    none: "no report",
     created: "Created",
+    by: "Ops Navigator · Infrastructure Optimization Agent",
+    heading: "# Infrastructure optimization report",
+    createdAt: "Created",
     scope: "Scope",
     missing: "_No report was produced for this domain._",
     data: "Raw data queries",
@@ -281,7 +295,7 @@ export default async function ({ execution_id }) {
   const stamp = new Date(Date.now() + 9 * 3600 * 1000).toISOString().slice(0, 16).replace("T", " ") + " KST";
 
   const covered = DOMAINS.filter((entry) => scope[entry.domain] === true);
-  const sections = [markdown(text.heading + "\\n\\n**" + text.created + ":** " + stamp + "  \\n**" + text.scope + ":** " + covered.map((entry) => entry.title[language]).join(", ") + "\\n\\n" + text.footer)];
+  const reports = [];
   for (const entry of covered) {
     let report = "";
     try {
@@ -290,16 +304,27 @@ export default async function ({ execution_id }) {
     } catch (error) {
       report = "";
     }
+    reports.push({ entry, report });
+  }
+
+  const sections = [markdown(text.heading + "\\n\\n**" + text.createdAt + ":** " + stamp + "  \\n**" + text.scope + ":** " + covered.map((entry) => entry.title[language]).join(", ") + "\\n\\n" + text.footer)];
+  for (const { entry, report } of reports) {
     // The report brings its own title; the domain heading is only for a missing one.
     sections.push(markdown(report ? report : "## " + entry.title[language] + "\\n\\n" + text.missing));
     sections.push(markdown("#### " + entry.title[language] + " - " + text.data));
     for (const item of entry.queries) sections.push(dql(item.title[language], item.query));
   }
 
-  const name = text.name + stamp;
+  // Notebooks lists show only titles, so the title names the domains that produced a report ("All"
+  // for all four). The description repeats scope and time in a fixed form.
+  const produced = reports.filter((item) => item.report).map((item) => item.entry);
+  const label = produced.length === DOMAINS.length ? text.all : produced.length > 0 ? produced.map((entry) => entry.short[language]).join("·") : text.none;
+  const name = text.name + label + " · " + stamp;
+  const missing = reports.filter((item) => !item.report).map((item) => item.entry.short[language]);
+  const description = text.scope + ": " + covered.map((entry) => entry.title[language]).join(", ") + (missing.length > 0 ? " (" + text.none + ": " + missing.join(", ") + ")" : "") + " · " + text.created + ": " + stamp + " · " + text.by;
   const content = { version: "7", defaultTimeframe: { from: "now()-2h", to: "now()" }, sections };
   const document = await documentsClient.createDocument({
-    body: { name, type: "notebook", content: new Blob([JSON.stringify(content)], { type: "application/json" }) },
+    body: { name, description, type: "notebook", content: new Blob([JSON.stringify(content)], { type: "application/json" }) },
   });
   const url = getEnvironmentUrl().replace(/\\/$/, "") + "/ui/apps/dynatrace.notebooks/notebook/" + document.id;
   return { notebookId: document.id, name, url };
@@ -366,3 +391,18 @@ export const parseRecipients = (text: string) =>
     .filter((item) => item.length > 0);
 
 export const isEmailAddress = (text: string) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(text);
+
+/**
+ * A saved workflow's input in one line for the Automation page ("K8s·호스트·디스크 / 노트북 / 한국어"),
+ * or null when it is not this template's input (edited by hand in the Workflows app, say).
+ */
+export const summarizeInfraInput = (input: unknown): string | null => {
+  if (typeof input !== "object" || input === null) return null;
+  const { scope, delivery, language, emails } = input as Partial<InfraOptimizationInput>;
+  if (typeof scope !== "object") return null;
+  const domains = INFRA_DOMAINS.filter((domain) => scope[domain] === true).map((domain) => DOMAINS[domain].short.Korean);
+  const all = domains.length === INFRA_DOMAINS.length ? "전체" : domains.join("·") || "범위 없음";
+  const recipients = emails?.to?.length ? ` (${emails.to.join(", ")})` : "";
+  const how = delivery === "notebook" ? "노트북" : `이메일${recipients}`;
+  return `${all} / ${how} / ${language === "English" ? "English" : "한국어"}`;
+};

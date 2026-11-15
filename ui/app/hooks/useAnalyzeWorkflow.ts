@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useReloadOnReturn } from "./useReloadOnReturn";
 import { findWorkflows, readAnnotation, requestAnalysis, type AnnotationState, type FoundWorkflows } from "../analyzeWorkflow";
 
 const messageOf = (error: unknown) => (error instanceof Error ? error.message : String(error));
@@ -12,15 +13,19 @@ export type WorkflowStatus =
 /** Which Analyze Problem workflows exist. Unknown is a normal state: the page works without it. */
 export const useAnalyzeWorkflows = () => {
   const [status, setStatus] = useState<WorkflowStatus>({ kind: "loading" });
-  const reload = useCallback(async () => {
-    setStatus({ kind: "loading" });
+  const load = useCallback(async (quiet: boolean) => {
+    if (!quiet) setStatus({ kind: "loading" });
     try {
       setStatus({ kind: "ready", workflows: await findWorkflows() });
     } catch (error) {
       setStatus({ kind: "unknown", message: messageOf(error) });
     }
   }, []);
-  useEffect(() => { void reload(); }, [reload]);
+  useEffect(() => { void load(false); }, [load]);
+  // "만들기" opens the Workflows app in another tab; coming back rereads what was saved there.
+  const reloadQuietly = useCallback(() => { void load(true); }, [load]);
+  useReloadOnReturn(reloadQuietly);
+  const reload = useCallback(() => load(false), [load]);
   return { status, reload };
 };
 

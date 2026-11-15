@@ -306,11 +306,24 @@
 .automation-emails > :last-child { grid-column: 1 / -1; }
 .automation-problems { margin: 0; padding-left: 18px; color: #991b1b; font-size: 12px; }
 .automation-actions { display: flex; gap: 10px; }
-.automation-status { display: flex; flex-direction: column; gap: 6px; padding-top: 12px; border-top: 1px solid var(--dashboard-line); }
-.automation-status a { display: inline-flex; align-items: center; gap: 4px; color: #0369a1; font-size: 12px; text-decoration: none; }
-.automation-status a svg { width: 12px; height: 12px; }
 .automation-details { font-size: 12px; color: var(--dashboard-muted); }
 .automation-details summary { cursor: pointer; color: var(--dashboard-ink); font-weight: 600; }
 .automation-details ol { margin: 8px 0 0; padding-left: 18px; display: flex; flex-direction: column; gap: 4px; }
 .automation-details code { overflow-wrap: anywhere; }
 @media (max-width: 760px) { .automation-scope, .automation-emails { grid-template-columns: 1fr; } }
+/* Whether the workflow exists - the first thing the card says. */
+.automation-banner { display: flex; flex-direction: column; gap: 12px; padding: 14px 16px; border: 1px solid var(--dashboard-line); border-radius: 6px; background: #f8fafc; font-size: 13px; }
+.automation-banner-ok { border-color: #86efac; background: #f0fdf4; }
+.automation-banner-old { border-color: #fcd34d; background: #fffbeb; }
+.automation-banner-title { color: #166534; font-size: 14px; }
+.automation-banner-footer { display: flex; justify-content: flex-end; }
+.automation-created { display: flex; flex-direction: column; gap: 6px; padding: 12px 14px; border: 1px solid var(--dashboard-line); border-radius: 6px; background: var(--dashboard-surface); }
+.automation-created-title { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; }
+.automation-created-old { opacity: .85; }
+.automation-warning { color: #92400e; font-size: 12px; }
+.automation-run { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.automation-run a { display: inline-flex; align-items: center; gap: 4px; color: #0369a1; font-size: 12px; text-decoration: none; }
+.automation-run a svg { width: 12px; height: 12px; }
+.automation-actions { align-items: center; flex-wrap: wrap; }
+.automation-more > summary { cursor: pointer; font-size: 13px; font-weight: 600; color: var(--dashboard-ink); margin-bottom: 14px; }
+.automation-more[open] { display: flex; flex-direction: column; gap: 16px; }

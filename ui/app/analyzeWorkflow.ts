@@ -2,7 +2,7 @@ import { getAppId, getEnvironmentUrl } from "@dynatrace-sdk/app-environment";
 import { workflowsClient, type Task, type Tasks, type WorkflowList } from "@dynatrace-sdk/client-automation";
 import { businessEventsClient } from "@dynatrace-sdk/client-classic-environment-v2";
 import { queryExecutionClient } from "@dynatrace-sdk/client-query";
-import { sendIntent } from "@dynatrace-sdk/navigation";
+import { getIntentLink } from "@dynatrace-sdk/navigation";
 import { linkifyEntities } from "./problemAnalysis";
 
 /**
@@ -304,10 +304,13 @@ const triggers: Record<WorkflowKind, Record<string, unknown>> = {
  * declares an optional `id` but documents no behaviour for it; the settings sheet still lists any
  * leftover versions with links, in case it creates a copy instead.
  */
-export const openCreateWorkflow = (kind: WorkflowKind, existingId?: string) =>
-  sendIntent(
-    { ...(existingId ? { id: existingId } : {}), title: WORKFLOW_TITLES[kind], isPrivate: false, tasks: workflowTasks(kind), trigger: triggers[kind] } as never,
-    { recommendedAppId: "dynatrace.automations", recommendedIntentId: "create-workflow" },
+export const createWorkflowLink = (kind: WorkflowKind, existingId?: string) =>
+  // A link, opened in a new tab, rather than sendIntent: the Blast radius page and its open problem
+  // stay where they were, and the sheet rereads the workflows when the tab comes back.
+  getIntentLink(
+    { ...(existingId ? { id: existingId } : {}), title: WORKFLOW_TITLES[kind], isPrivate: false, tasks: workflowTasks(kind), trigger: triggers[kind] },
+    "dynatrace.automations",
+    "create-workflow",
   );
 
 export type WorkflowInfo = { id: string; title: string; active: boolean; version: number; outdated: boolean; actor: string | null };

@@ -3,7 +3,7 @@ import { Button } from "@dynatrace/strato-components/buttons";
 import { Sheet } from "@dynatrace/strato-components/overlays";
 import { Paragraph } from "@dynatrace/strato-components/typography";
 import { ExternalLinkIcon } from "@dynatrace/strato-icons";
-import { TEMPLATE_VERSION, WORKFLOW_PERMISSIONS, WORKFLOW_TITLES, openCreateWorkflow, workflowLink, type WorkflowInfo, type WorkflowKind } from "../analyzeWorkflow";
+import { TEMPLATE_VERSION, WORKFLOW_PERMISSIONS, WORKFLOW_TITLES, createWorkflowLink, workflowLink, type WorkflowInfo, type WorkflowKind } from "../analyzeWorkflow";
 import type { WorkflowStatus } from "../hooks/useAnalyzeWorkflow";
 
 type Props = { show: boolean; onClose: () => void; status: WorkflowStatus; onReload: () => void };
@@ -22,8 +22,9 @@ const Row = ({ kind, info, known }: { kind: WorkflowKind; info: WorkflowInfo | u
       {!info ? "없음" : `${info.active ? "켜짐" : "꺼짐"} · 템플릿 v${info.version}${info.outdated ? ` (v${TEMPLATE_VERSION} 있음)` : ""}${info.actor ? ` · 실행 주체 ${info.actor}` : ""}`}
     </span>}
     <div className="auto-analysis-actions">
-      {(!info || info.outdated) && <Button variant={info ? "default" : "emphasized"} color="primary" onClick={() => openCreateWorkflow(kind, info?.id)}>
+      {(!info || info.outdated) && <Button as="a" href={createWorkflowLink(kind, info?.id)} target="_blank" rel="noopener noreferrer" variant={info ? "default" : "emphasized"} color="primary">
         {info ? `v${TEMPLATE_VERSION}로 업데이트` : "만들기"}
+        <Button.Suffix><ExternalLinkIcon /></Button.Suffix>
       </Button>}
       {info && <a href={workflowLink(info.id)} target="_blank" rel="noopener noreferrer">Workflows 앱에서 열기 (켜기·끄기) <ExternalLinkIcon /></a>}
     </div>
@@ -32,7 +33,7 @@ const Row = ({ kind, info, known }: { kind: WorkflowKind; info: WorkflowInfo | u
 
 /**
  * Settings for the two Analyze Problem workflows. The app cannot write workflows (custom apps may not
- * hold that scope), so "만들기" opens the Workflows app with the definition filled in and the user
+ * hold that scope), so "만들기" opens the Workflows app in a new tab with the definition filled in and the user
  * saves it; switching and deleting happen there too.
  */
 export const AutoAnalysisSheet = ({ show, onClose, status, onReload }: Props) => {
@@ -46,8 +47,8 @@ export const AutoAnalysisSheet = ({ show, onClose, status, onReload }: Props) =>
           workflow 하나에는 트리거를 하나만 둘 수 있어서 두 개로 나뉩니다. 태스크는 같습니다.
         </Paragraph>
         <Paragraph className="auto-analysis-note">
-          <b>만들기</b>를 누르면 Workflows 앱이 정의가 채워진 상태로 열립니다. 저장하면 만든 사람의 권한으로 실행됩니다.
-          저장한 뒤 이 패널에서 <b>새로 고침</b>을 누르세요. 막 저장한 workflow는 몇 분 지나야 트리거가 동작합니다.
+          <b>만들기</b>를 누르면 Workflows 앱이 새 탭에서 정의가 채워진 상태로 열립니다. 저장하면 만든 사람의 권한으로 실행됩니다.
+          저장하고 이 탭으로 돌아오면 상태를 다시 읽습니다 (바뀌지 않으면 <b>새로 고침</b>). 막 저장한 workflow는 몇 분 지나야 트리거가 동작합니다.
           처음 만든 workflow는 Workflows 앱의 <b>Authorization settings</b>에서 <b>맞춤 선택</b>으로 다음 권한을 허용해야 SRE agent가 데이터를 조회합니다: <code>{WORKFLOW_PERMISSIONS.join(", ")}</code>.
           "추천" 묶음은 관련 없는 권한까지 요구하므로 쓰지 마세요.
         </Paragraph>

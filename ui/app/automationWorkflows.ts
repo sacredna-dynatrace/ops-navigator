@@ -1,23 +1,57 @@
-import { workflowsClient } from "@dynatrace-sdk/client-automation";
-import { sendIntent } from "@dynatrace-sdk/navigation";
+import { getEnvironmentUrl } from "@dynatrace-sdk/app-environment";
+import { executionsClient, workflowsClient } from "@dynatrace-sdk/client-automation";
+import { getIntentLink } from "@dynatrace-sdk/navigation";
 import {
   INFRA_MARKER_PATTERN,
   INFRA_TEMPLATE_VERSION,
   INFRA_WORKFLOW_TITLE,
   NOTEBOOK_TASK,
   infraOptimizationWorkflow,
+  summarizeInfraInput,
   type InfraOptimizationInput,
 } from "./infraOptimizationWorkflow";
 
 /**
  * The Automation page's workflows. Like the Analyze Problem ones (analyzeWorkflow.ts) the app cannot
- * write workflows, so it opens the Workflows app's create-workflow intent with the definition filled
- * in and the user saves it. The intent takes `input` and `isPrivate` but no description or guide.
+ * write workflows: it links to the Workflows app's create-workflow intent with the definition filled
+ * in, and the user saves it. The intent takes `input`, `isPrivate` and `hourlyExecutionLimit` - checked
+ * on diw85600 with a workflow saved from it - but no description or guide.
+ *
+ * A link rather than sendIntent, so the editor opens in a new tab and this page stays where it was;
+ * the page reloads its list when the tab comes back.
  */
-export const openCreateInfraWorkflow = (input: InfraOptimizationInput) =>
-  sendIntent(infraOptimizationWorkflow(input) as never, { recommendedAppId: "dynatrace.automations", recommendedIntentId: "create-workflow" });
+export const createInfraWorkflowLink = (input: InfraOptimizationInput) =>
+  getIntentLink(infraOptimizationWorkflow(input), "dynatrace.automations", "create-workflow");
 
-export type CreatedWorkflow = { id: string; title: string; version: number; outdated: boolean; isPrivate: boolean };
+const base = () => getEnvironmentUrl().replace(/\/$/, "");
+/** A run in the Workflows app. */
+export const executionLink = (id: string) => `${base()}/ui/apps/dynatrace.automations/executions/${encodeURIComponent(id)}`;
+
+export type LastRun = { id: string; state: string; startedAt: string | null; notebookUrl: string | null };
+
+export type CreatedWorkflow = {
+  id: string;
+  title: string;
+  version: number;
+  outdated: boolean;
+  isPrivate: boolean;
+  /** "Manual", "Schedule", "Event" - as the API names it. */
+  triggerType: string;
+  /** The saved input in one line, or null when it no longer has this template's shape. */
+  settings: string | null;
+  lastRun: LastRun | null;
+};
+
+/** The notebook a run saved, if it ran in notebook mode; skipped or failed task -> null. */
+const notebookOf = async (executionId: string): Promise<string | null> => {
+  try {
+    const task = await executionsClient.getTaskExecution({ executionId, id: NOTEBOOK_TASK });
+    const url = (task.result as { url?: unknown } | undefined)?.url;
+    return typeof url === "string" ? url : null;
+  } catch {
+    return null;
+  }
+};
 
 /**
  * The Infrastructure Optimization workflows this app made that the user can see, newest template
@@ -35,7 +69,19 @@ export const findInfraWorkflows = async (): Promise<CreatedWorkflow[]> => {
     const match = INFRA_MARKER_PATTERN.exec(script);
     if (!match) continue;
     const version = Number(match[1]);
-    found.push({ id: full.id, title: full.title, version, outdated: version < INFRA_TEMPLATE_VERSION, isPrivate: full.isPrivate === true });
+    const last = full.lastExecution;
+    found.push({
+      id: full.id,
+      title: full.title,
+      version,
+      outdated: version < INFRA_TEMPLATE_VERSION,
+      isPrivate: full.isPrivate === true,
+      triggerType: full.triggerType,
+      settings: summarizeInfraInput(full.input),
+      lastRun: last
+        ? { id: last.id, state: last.state, startedAt: last.startedAt ? new Date(last.startedAt).toISOString() : null, notebookUrl: last.state === "SUCCESS" ? await notebookOf(last.id) : null }
+        : null,
+    });
   }
   return found.sort((a, b) => b.version - a.version);
 };
