@@ -20,6 +20,10 @@ import { answerLanguageLine } from "./problemAnalysis";
  */
 
 /**
+ * v17: each finding's meaning spelled out (CPU findings had been described as eviction risks), the
+ * values after rightsizing only from the _after fields, Kubernetes node hosts given a range and a
+ * pointer only, and the summary takes node changes from the Kubernetes report alone (it had turned
+ * a 100% host CPU into "add nodes" for a cluster that keeps its 2).
  * v16: cleanup_old_versions moves to its own spot - v15 put k8s_rightsizing on it, and the Workflows
  * app refused to save the workflow.
  * v15: one node finding per cluster (no memory-only scale-down), host groups with their ranges and
@@ -56,7 +60,7 @@ import { answerLanguageLine } from "./problemAnalysis";
  * to the trash (CLEANUP_TASK).
  * v2: the notebook's title names the domains it covers, and it gets a description.
  */
-export const INFRA_TEMPLATE_VERSION = 16;
+export const INFRA_TEMPLATE_VERSION = 17;
 export const INFRA_WORKFLOW_TITLE = "[Ops Navigator] Infrastructure Optimization";
 /** Finds every version, v1-v2 titled like Dynatrace's template included; the marker decides. */
 export const INFRA_WORKFLOW_SEARCH = "Infrastructure Optimization";
@@ -373,9 +377,9 @@ const DATA_RULES = [
   "For a cluster, state the node counts as given and only in this form: CPU needs nodes_needed_for_cpu nodes and memory nodes_needed_for_memory, so at least minimum_nodes are needed and removable_nodes can go. Never call a resource binding, limiting or constraining (제한/결정 리소스). A node count is the requests divided by (allocatable per node x 0.85), rounded up - usage does not set it.",
   "Write the workload counts only in this form: of total_workloads workloads, analyzed_workloads were analyzed and excluded_workloads left out (전체 N개 중 M개를 분석하고 K개를 제외). Never add, subtract or otherwise combine counts yourself.",
   "throttling_p95 is a relative indicator: write it as a bare number, never followed by mcores or any other unit.",
-  "Usage above the requests does not stop scheduling: for CPU it means less CPU under contention, for memory being among the first evicted under memory pressure - eviction concerns memory only. Never use the word scheduling (스케줄링).",
+  "Never use the word scheduling (스케줄링). For what a finding means, use the meanings the Kubernetes report lists - never your own.",
   "A cluster's finding is its node action, from minimum_nodes: SCALE_DOWN (removable_nodes can go), SCALE_UP (more nodes are needed) or NOMINAL. The memory data has figures only and no finding of its own - never present a memory-only scale-down.",
-  "After pod rightsizing gives each cluster's requests and node counts once every recommended request is applied: say what rightsizing does to the nodes only with minimum_nodes_after and removable_nodes_after, and never guess whether the requests rise or fall. analyzed_cpu_requests_percent and analyzed_mem_requests_percent show, per cluster, how much of the requests the advice covers; only for a cluster where a share is under 50%, say that most of those requests belong to the pods left out (for example Spark executors), so sizing them is the larger lever.",
+  "After pod rightsizing gives each cluster's requests and node counts once every recommended request is applied: say what rightsizing does to the nodes only with the _after fields (nodes_needed_after_for_cpu, nodes_needed_after_for_memory, minimum_nodes_after, removable_nodes_after) - never repeat today's node counts as values after rightsizing - and never guess whether the requests rise or fall. analyzed_cpu_requests_percent and analyzed_mem_requests_percent show, per cluster, how much of the requests the advice covers; only for a cluster where a share is under 50%, say that most of those requests belong to the pods left out (for example Spark executors), so sizing them is the larger lever.",
   "Throttling concerns CPU only - never mention throttling for memory.",
   "A memory working set within about 1% of its limit can be page cache filling up to the limit: say that raising such a limit may only grow the cache, so check the container's actual need first.",
   "EXCLUDED_NO_CONTROLLER counts pods without a controller (for example Spark executors or debug pods) and static pods: they are renamed on every run and sized elsewhere. Give their count in one line and no advice for them.",
@@ -467,6 +471,14 @@ Goals:
 Use the data provided in the context. Findings are already provided for scale; however, still analyze the numbers and produce a recommendation for each example cluster. For instance, you could recommend reducing the number of nodes by 3 or scale down from a \`m7a.2xlarge\` to a \`m7a.large\`.
 A cluster's CPU and memory findings must be read together: the node count can go no lower than minimum_nodes, which the CPU data gives with the resource that sets it.
 
+# Meaning of each finding (use these words, not your own)
+- CPU INCREASE_REQUESTS or NO_REQUESTS_SET: the workload uses more CPU than it reserves, so on a busy node it gets less CPU than it needs and slows down. CPU never causes eviction.
+- CPU INCREASE_LIMITS: the workload is throttled at its limit.
+- CPU REDUCE_REQUESTS or REDUCE_LIMITS: CPU is reserved but not used, which keeps other pods off the node.
+- Memory OOM_KILLS or INCREASE_LIMITS: the container reaches its memory limit and is killed (OOM).
+- Memory INCREASE_REQUESTS: the workload uses more memory than it reserves, so under memory pressure it is among the first evicted.
+- Memory REDUCE_REQUESTS or REDUCE_LIMITS: memory is reserved but not used.
+
 # Golden rules
 1. Mention every finding with its count from the data.
 2. Use the recommended values from the context as they are; do not adjust them.
@@ -484,9 +496,9 @@ If a user wants to optimize the size of their hosts, they generally have three g
 3. Increase the size of under-provisioned hosts to reduce risk
 
 Be sure to provide an overview (total_hosts and the number of hosts per utilization) and any insights from the data provided. cpu_p90_percent and mem_p90_percent are percentages of the host's CPU and memory.
-Each group gives the range of its hosts (cpu_p90_min_percent to cpu_p90_max_percent, and the same for memory): describe a group by its range, never by its examples.
+Each group gives the range of its hosts (cpu_p90_min_percent to cpu_p90_max_percent, and the same for memory): describe a group only by its range - never by its examples, and never say what most hosts do.
 Hosts in a KUBERNETES_NODE group are Kubernetes nodes, one group per cluster (k8s_cluster); a node's host CPU covers everything on the host over 30 days, while the cluster figures are container requests over 7 days, so do not judge cluster capacity from it.
-For KUBERNETES_NODE hosts: do not recommend resizing, removing or adding them one by one - they are sized with their cluster, so refer to the Kubernetes report's cluster section, and only mention nodes running hot.
+For KUBERNETES_NODE hosts: give only the group's range and a pointer to the Kubernetes report's cluster section - no resizing, removing or adding, and no risk, pressure or capacity statements (the host data covers 30 days and includes nodes since replaced).
 Name the change for each group (smaller or larger instances, shutting down) without any money amount.`;
 
 const DISK_PROMPT = `Provide a markdown report for:
@@ -504,12 +516,12 @@ const reportText = (domain: InfraDomain) => `{{ result("${DOMAINS[domain].prompt
 const SUMMARY_DATA = INFRA_DOMAINS.map((domain) => `## ${DOMAINS[domain].title.English} report\n${reportText(domain)}`).join("\n\n");
 const SUMMARY_PROMPT = `Below are infrastructure optimization reports, one per domain (a report given as NOT_RUN was out of scope or failed - skip it).
 Write the key actions across all of them: 3 to 5 bullet points, the highest risk or the largest saving first. Each bullet names the affected cluster, workload, host or disk and the concrete change, with the number from the report that justifies it.
-Then one line with the resources the reports say can be freed (nodes, GiB) - no money amounts or saving percentages.`;
+Then one line with the resources the reports say can be freed (nodes, GiB), copying the totals the reports state (such as the total reclaimable GiB) - never a sum of the bullets above, and no money amounts or saving percentages.`;
 const SUMMARY_INSTRUCTION = [
   "Start directly with the first bullet - no title, no introduction. Use only facts and numbers that appear in the reports; do not add new findings, and do not repeat a recommendation a report itself marks as not advisable.",
   "Copy every number exactly as the report states it and keep it with the item it belongs to - never move a value from one workload, cluster or disk to another, never add numbers up yourself, and add no percentage or amount the report does not give.",
   "Throttling has no unit - never write mcores or any other unit for it.",
-  "For node counts, write only the CPU and memory node counts and the minimum as the Kubernetes report gives them - never call a resource binding or limiting.",
+  "For node counts, write only the CPU and memory node counts and the minimum as the Kubernetes report gives them - never call a resource binding or limiting. Adding or removing Kubernetes nodes comes only from the Kubernetes report's cluster section: never turn what the host report says about Kubernetes nodes into a cluster action.",
 ].join("\n");
 
 const NETWORK_PROMPT = `Provide a markdown report for:
