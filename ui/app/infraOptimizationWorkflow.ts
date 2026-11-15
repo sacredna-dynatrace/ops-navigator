@@ -20,6 +20,10 @@ import { answerLanguageLine } from "./problemAnalysis";
  */
 
 /**
+ * v10: workloads without a controller are left out of the advice, request and limit floors,
+ * throttling without a unit, node counts explained from the allocatable per node, non-cloud instance
+ * types dropped, and disks grouped by mount and size with a recommended size, container filesystems
+ * left out (see infraOptimizationQueries.ts).
  * v9: the tenant leads the email subject ("[diw85600] ..."), and the email and notebook name the
  * environment with its URL - one inbox can get these from several tenants - and each domain's data
  * period. The saturated-interfaces query looks at 7 days instead of the default 2 h.
@@ -35,7 +39,7 @@ import { answerLanguageLine } from "./problemAnalysis";
  * to the trash (CLEANUP_TASK).
  * v2: the notebook's title names the domains it covers, and it gets a description.
  */
-export const INFRA_TEMPLATE_VERSION = 9;
+export const INFRA_TEMPLATE_VERSION = 10;
 export const INFRA_WORKFLOW_TITLE = "[Ops Navigator] Infrastructure Optimization";
 /** Finds every version, v1-v2 titled like Dynatrace's template included; the marker decides. */
 export const INFRA_WORKFLOW_SEARCH = "Infrastructure Optimization";
@@ -151,7 +155,9 @@ const DATA_RULES = [
   "Data rules: use only values present in the data, exactly as given - they are already in the unit their field name says (_mcores, _mib, _gib, _percent); do not convert or recompute them. Write '-' only for a value that is null in the data.",
   "Recommended values are already computed: present recommended_request_* and recommended_limit_* exactly as given, and never write a recommended number of your own. A null recommended value means keep the current setting - say 'keep' (유지), not a number. Explain each recommendation briefly from the usage, requests and limits.",
   "Where limit_below_request is true, the limit is a sum over containers some of which set no limit (0 means none set) - mention that the limit cannot be judged from the sum.",
-  "For a cluster, the smallest safe node count is the larger of nodes_needed_for_cpu and nodes_needed_for_memory; never recommend fewer nodes than that, and recommend removing nodes only when it is below avg_node_count.",
+  "For a cluster, the smallest safe node count is the larger of nodes_needed_for_cpu and nodes_needed_for_memory; never recommend fewer nodes than that, and recommend removing nodes only when it is below avg_node_count. Explain a node count only as the requests divided by (allocatable per node x 0.85), rounded up, using cpu_allocatable_per_node_mcores or mem_allocatable_per_node_gib - usage does not set it.",
+  "EXCLUDED_NO_CONTROLLER counts pods without a controller (for example Spark executors or debug pods) and static pods: they are renamed on every run and sized elsewhere. Give their count in one line and no advice for them.",
+  "throttling_p95 is a relative throttling indicator, not millicores: say whether throttling occurs and how it compares between workloads, never with a unit.",
   "Estimate costs only for a recognizable cloud instance type (for example m5.large, e2-standard-4, Standard_D4s_v3), and state the price basis you assume; otherwise write that the cost cannot be estimated - no amount and no percentage.",
   "Do not list items whose finding is NOMINAL; give their count only.",
 ].join("\n");
@@ -244,7 +250,8 @@ If disk utilization is not optimized, it can result in either wasted spend or wo
 1. Disks that are overutilized and likely to fill
 2. Disks that are underutilized and will likely never fill, which can safely be shrunken
 Note: disks that are less than 50GiB are not relevant.
-disk_size_gib is the disk's size, used_gib its average use, and never_used_gib the free space it never dipped below in 30 days. A disk can be shrunk by at most never_used_gib minus a safety margin you state; total_never_used_gib is the sum over all under-utilized disks.`;
+For over-utilized disks, disk_size_gib is the disk's size, used_gib its average use, and never_used_gib the free space it never dipped below in 30 days.
+Under-utilized disks come grouped by mount point and size: each group gives how many disks it holds (disks), some of their hosts, the 30-day peak use (max_used_gib, max_disk_percent), the size to shrink each disk to (recommended_size_gib: the peak plus 30%) and the space the whole group frees (reclaimable_gib). disk_count, group_count and total_reclaimable_gib are the totals. Show the groups in a table as given, describe each group only by its own numbers - never generalize one group's size to all disks - and write that a disk is shrunk TO recommended_size_gib, freeing reclaimable_gib. For database data volumes, add that expected data growth should be checked before shrinking.`;
 
 /** The key-actions summary: read only the finished reports, so it repeats no number they lack. */
 const ANY_SCOPE = INFRA_DOMAINS.map(inScope).join(" or ");
