@@ -20,6 +20,9 @@ import { answerLanguageLine } from "./problemAnalysis";
  */
 
 /**
+ * v13: the number check matches each number against values of the kind its unit names (%, mcores,
+ * MiB, GiB, counts); no money amounts at all; hosts that are Kubernetes nodes are their own group;
+ * host values named _percent; host total; wording rules for scheduling and memory throttling.
  * v12: numbers in the AI's text that no query returned are marked and listed under the report
  * (checkNumbers) - the first check caught "8,610 / (3,500 x 0.85) = 3.26, so 4 nodes" (2.89; the
  * query says 3).
@@ -45,7 +48,7 @@ import { answerLanguageLine } from "./problemAnalysis";
  * to the trash (CLEANUP_TASK).
  * v2: the notebook's title names the domains it covers, and it gets a description.
  */
-export const INFRA_TEMPLATE_VERSION = 12;
+export const INFRA_TEMPLATE_VERSION = 13;
 export const INFRA_WORKFLOW_TITLE = "[Ops Navigator] Infrastructure Optimization";
 /** Finds every version, v1-v2 titled like Dynatrace's template included; the marker decides. */
 export const INFRA_WORKFLOW_SEARCH = "Infrastructure Optimization";
@@ -186,7 +189,7 @@ const TABLES: Record<InfraQueryName, TableSpec> = {
   },
   k8s_workload_cpu: {
     layout: "byFinding", nested: "findings", findingField: "finding", countField: "count_workloads_with_finding",
-    totals: [total("analyzed_workloads", "분석한 워크로드", "Workloads analyzed"), total("excluded_workloads", "제외한 워크로드 (컨트롤러 없는 Pod·정적 Pod)", "Workloads left out (no controller, static pods)")],
+    totals: [total("total_workloads", "전체 워크로드", "Workloads in total"), total("analyzed_workloads", "분석한 워크로드", "Workloads analyzed"), total("excluded_workloads", "제외한 워크로드 (컨트롤러 없는 Pod·정적 Pod)", "Workloads left out (no controller, static pods)")],
     columns: [
       col("k8s.cluster.name", "클러스터", "Cluster"),
       col("k8s.workload.name", "워크로드", "Workload"),
@@ -201,7 +204,7 @@ const TABLES: Record<InfraQueryName, TableSpec> = {
   },
   k8s_workload_memory: {
     layout: "byFinding", nested: "findings", findingField: "finding", countField: "count_workloads_with_finding",
-    totals: [total("analyzed_workloads", "분석한 워크로드", "Workloads analyzed"), total("excluded_workloads", "제외한 워크로드 (컨트롤러 없는 Pod·정적 Pod)", "Workloads left out (no controller, static pods)")],
+    totals: [total("total_workloads", "전체 워크로드", "Workloads in total"), total("analyzed_workloads", "분석한 워크로드", "Workloads analyzed"), total("excluded_workloads", "제외한 워크로드 (컨트롤러 없는 Pod·정적 Pod)", "Workloads left out (no controller, static pods)")],
     columns: [
       col("k8s.cluster.name", "클러스터", "Cluster"),
       col("k8s.workload.name", "워크로드", "Workload"),
@@ -214,11 +217,13 @@ const TABLES: Record<InfraQueryName, TableSpec> = {
     ],
   },
   host_utilization: {
-    layout: "byFinding", findingField: "utilization", countField: "count",
+    layout: "byFinding", nested: "utilization_groups", findingField: "utilization", countField: "count",
+    totals: [total("total_hosts", "전체 호스트", "Hosts in total")],
     columns: [
       col("dt.entity.host.name", "호스트", "Host"),
-      col("cpu_p90", "CPU p90 (%)", "CPU p90 (%)"),
-      col("mem_p90", "메모리 p90 (%)", "Memory p90 (%)"),
+      col("cpu_p90_percent", "CPU p90 (%)", "CPU p90 (%)"),
+      col("mem_p90_percent", "메모리 p90 (%)", "Memory p90 (%)"),
+      col("k8s_cluster", "Kubernetes 클러스터", "Kubernetes cluster"),
       col("cloudType", "클라우드 유형", "Cloud type"),
       col("instanceType", "인스턴스 유형", "Instance type"),
     ],
@@ -287,6 +292,7 @@ const FINDINGS: [string, string, string][] = [
   ["OVERPROVISIONED", "과다 할당", "Over-provisioned"],
   ["UNUSED", "미사용 추정", "Possibly unused"],
   ["NOMINAL", "정상", "Nominal"],
+  ["KUBERNETES_NODE", "Kubernetes 노드 (클러스터 섹션 참고)", "Kubernetes nodes (see the cluster section)"],
   ["EXCLUDED_NO_CONTROLLER", "제외 (컨트롤러 없는 Pod·정적 Pod)", "Left out (no controller, static pods)"],
 ];
 
@@ -330,14 +336,15 @@ const DATA_RULES = [
   "Data rules: use only values present in the data, exactly as given - they are already in the unit their field name says (_mcores, _mib, _gib, _percent); do not convert or recompute them. Write '-' only for a value that is null in the data.",
   "Recommended values are already computed: present recommended_request_* and recommended_limit_* exactly as given, and never write a recommended number of your own. A null recommended value means keep the current setting - say 'keep' (유지), not a number. Explain each recommendation briefly from the usage, requests and limits.",
   "Where limit_below_request is true, the limit is a sum over containers some of which set no limit (0 means none set) - mention that the limit cannot be judged from the sum.",
-  "Do not write tables and do not list the examples row by row: data tables with every finding, count and example are added under your text automatically. Write prose and short bullets that interpret the data, and name only the few items that matter most, each with its own numbers.",
+  "Do not write any tables - not even a table of counts - and do not list the examples row by row: data tables with every finding, count and example are added under your text automatically. Write prose and short bullets that interpret the data, and name only the few items that matter most, each with its own numbers.",
   "For a cluster, minimum_nodes is the smallest safe node count, binding_resource the resource that sets it (CPU or memory) and removable_nodes how many nodes could go - state them as given and never name the other resource as the one that sets the minimum. Explain a node count only as the requests divided by (allocatable per node x 0.85), rounded up, using cpu_allocatable_per_node_mcores or mem_allocatable_per_node_gib - usage does not set it.",
-  "analyzed_workloads and excluded_workloads are the workload totals (analyzed already leaves the excluded out) - use them as given and never add, subtract or otherwise combine counts yourself.",
+  "total_workloads is every workload, excluded_workloads those left out and analyzed_workloads those analyzed (total minus excluded, already worked out): name each as given, and never add, subtract or otherwise combine counts yourself.",
   "throttling_p95 is a relative indicator: write it as a bare number, never followed by mcores or any other unit.",
-  "Usage above the requests does not stop scheduling: under contention such a workload gets less CPU, and under memory pressure it is among the first evicted. Say that, not 'scheduling risk'.",
+  "Usage above the requests does not stop scheduling: under contention such a workload gets less CPU, and under memory pressure it is among the first evicted. Say that, and never use the word scheduling (스케줄링).",
+  "Throttling concerns CPU only - never mention throttling for memory.",
   "A memory working set within about 1% of its limit can be page cache filling up to the limit: say that raising such a limit may only grow the cache, so check the container's actual need first.",
   "EXCLUDED_NO_CONTROLLER counts pods without a controller (for example Spark executors or debug pods) and static pods: they are renamed on every run and sized elsewhere. Give their count in one line and no advice for them.",
-  "Estimate costs only for a cluster or host whose own instanceType is a recognizable cloud instance type (for example m5.large, e2-standard-4, Standard_D4s_v3), and state the price basis you assume; never borrow another cluster's or host's instance type, and give no total across items. Otherwise write that the cost cannot be estimated - no amount and no percentage.",
+  "Never write money amounts, prices, cost figures or saving percentages - not even as estimates or examples, and whatever the instance type. Name savings only as the resources the data gives: removable_nodes, reclaimable_gib, and the recommended requests and limits.",
   "Do not list items whose finding is NOMINAL; give their count only.",
 ].join("\n");
 
@@ -401,14 +408,14 @@ Goals:
 3. Increase the size of under-provisioned nodes to reduce risk
 Use the data provided in the context. Findings are already provided for scale; however, still analyze the numbers and produce a recommendation for each example cluster. For instance, you could recommend reducing the number of nodes by 3 or scale down from a \`m7a.2xlarge\` to a \`m7a.large\`.
 A cluster's CPU and memory findings must be read together: the node count can go no lower than minimum_nodes, which the CPU data gives with the resource that sets it.
-If possible, using the recommendations and the instanceType and cloudType, estimate potential cost savings.
 
 # Golden rules
 1. Mention every finding with its count from the data.
 2. Use the recommended values from the context as they are; do not adjust them.
 3. Leave the examples to the data tables under the report; name only the most important ones.`;
 
-const K8S_INSTRUCTION = `Be sure the report includes an overview with analyzed_workloads and excluded_workloads, what each finding means, the priorities, and if possible an estimate of cost savings.
+const K8S_INSTRUCTION = `Be sure the report includes an overview with total_workloads, analyzed_workloads and excluded_workloads, what each finding means, the priorities, and the resources that can be freed (removable_nodes) - no money amounts.
+Never write scheduling (스케줄링): requests below usage mean less CPU under contention and early eviction under memory pressure.
 Priorities: first OOM kills and limit increases, then every requests increase (all INCREASE_REQUESTS workloads, CPU and memory, with their counts), then reductions of requests and limits, and node changes last, after the pods are resized.`;
 
 const HOST_PROMPT = `Provide a markdown report for the following use case:
@@ -418,7 +425,9 @@ If a user wants to optimize the size of their hosts, they generally have three g
 2. Reduce over-provisioned hosts to save on cost
 3. Increase the size of under-provisioned hosts to reduce risk
 
-Be sure to provide an overview (including number of hosts per utilization) and any insights from the data provided. Give an estimated range of cost savings only for hosts whose instanceType is set; for a host without one, write that its cost cannot be estimated - no amount and no percentage.`;
+Be sure to provide an overview (total_hosts and the number of hosts per utilization) and any insights from the data provided. cpu_p90_percent and mem_p90_percent are percentages of the host's CPU and memory.
+Hosts in the KUBERNETES_NODE group are Kubernetes nodes (k8s_cluster names their cluster): do not recommend resizing, removing or adding them one by one - they are sized with their cluster, so refer to the Kubernetes report's cluster section, and only mention nodes running hot.
+Name the change for each group (smaller or larger instances, shutting down) without any money amount.`;
 
 const DISK_PROMPT = `Provide a markdown report for:
 ## Optimize disk usage
@@ -435,7 +444,7 @@ const reportText = (domain: InfraDomain) => `{{ result("${DOMAINS[domain].prompt
 const SUMMARY_DATA = INFRA_DOMAINS.map((domain) => `## ${DOMAINS[domain].title.English} report\n${reportText(domain)}`).join("\n\n");
 const SUMMARY_PROMPT = `Below are infrastructure optimization reports, one per domain (a report given as NOT_RUN was out of scope or failed - skip it).
 Write the key actions across all of them: 3 to 5 bullet points, the highest risk or the largest saving first. Each bullet names the affected cluster, workload, host or disk and the concrete change, with the number from the report that justifies it.
-Then one line with the total cost impact the reports give, or that none could be estimated.`;
+Then one line with the resources the reports say can be freed (nodes, GiB) - no money amounts or saving percentages.`;
 const SUMMARY_INSTRUCTION = [
   "Start directly with the first bullet - no title, no introduction. Use only facts and numbers that appear in the reports; do not add new findings, and do not repeat a recommendation a report itself marks as not advisable.",
   "Copy every number exactly as the report states it and keep it with the item it belongs to - never move a value from one workload, cluster or disk to another, never add numbers up yourself, and add no percentage or amount the report does not give.",
@@ -550,29 +559,71 @@ const renderData = (spec, records, language, text) => {
 // guessed or moved from another item (notebook 3869dd80: "throttling 20,414 mcores" on the wrong
 // workload, "311 workloads" for 94). Such numbers get a mark and are listed under the report.
 
-// Every number in the records, also rounded the ways a text writes them (12.0 -> 12, 7829.43 -> 7829.4).
-const collectNumbers = (value, into) => {
+// Every number in the records, also rounded the ways a text writes them (12.0 -> 12, 7829.43 -> 7829.4),
+// kept per kind of value as its field name says - so "11 mcores" is not taken for an 11 % CPU p90,
+// and "77 workloads" not for a 77 MiB working set (notebooks b650889b, d63e5204).
+const newKnown = () => ({ any: new Set(), percent: new Set(), mcores: new Set(), mib: new Set(), gib: new Set(), count: new Set(), score: new Set() });
+const kindOfField = (field) => {
+  const name = String(field ?? "").toLowerCase();
+  if (name.includes("throttling")) return "score";
+  if (name.includes("percent")) return "percent";
+  if (name.includes("mcores")) return "mcores";
+  if (name.endsWith("_mib") || name.endsWith("mib")) return "mib";
+  if (name.includes("_gib") || name.endsWith("gib")) return "gib";
+  if (["count", "workloads", "nodes", "disks", "containers", "oom", "hosts"].some((part) => name.includes(part))) return "count";
+  return null;
+};
+const collectNumbers = (value, into, field) => {
   if (Array.isArray(value)) {
-    for (const item of value) collectNumbers(item, into);
+    for (const item of value) collectNumbers(item, into, field);
   } else if (value !== null && typeof value === "object") {
-    for (const item of Object.values(value)) collectNumbers(item, into);
+    for (const [key, item] of Object.entries(value)) collectNumbers(item, into, key);
   } else {
     const number = typeof value === "number" ? value : typeof value === "string" && value.trim() !== "" ? Number(value) : NaN;
     if (Number.isFinite(number)) {
-      for (const form of [number, Math.round(number), Math.round(number * 10) / 10, Math.round(number * 100) / 100]) into.add(String(Math.abs(form)));
+      const kind = kindOfField(field);
+      for (const form of [number, Math.round(number), Math.round(number * 10) / 10, Math.round(number * 100) / 100]) {
+        into.any.add(String(Math.abs(form)));
+        if (kind) into[kind].add(String(Math.abs(form)));
+      }
     }
   }
   return into;
 };
-// Small numbers (list items, counts of a few) and the thresholds and factors the rules name.
-const ALLOWED = new Set(["7", "15", "20", "30", "40", "50", "64", "80", "85", "90", "95", "99", "100", "120", "125", "130", "150", "200", "0.4", "0.85", "0.9", "1.2", "1.25", "1.3", "1.5", "2.5"]);
-for (let small = 0; small <= 10; small++) ALLOWED.add(String(small));
-// Letters right after a number that make it a value with a unit rather than part of a name.
-const UNITS = ["mcores", "mcore", "GiB", "MiB", "TiB", "GB", "MB", "TB", "Gi", "Mi", "bps", "ms", "m", "x"];
+// Numbers the rules themselves name (thresholds, floors, factors), per kind; small ones (list items,
+// a few of something) pass everywhere.
+const ALLOWED = {
+  any: ["7", "15", "20", "30", "40", "50", "64", "80", "85", "90", "95", "99", "100", "120", "125", "130", "150", "200", "0.4", "0.85", "0.9", "1.2", "1.25", "1.3", "1.5", "2.5"],
+  percent: ["30", "40", "50", "80", "85", "90", "95", "100", "120", "125", "130", "150"],
+  mcores: ["50", "100"],
+  mib: ["16", "64"],
+  gib: ["20", "50"],
+  count: [],
+  score: [],
+};
+const isAllowed = (kind, value) => (Number.isInteger(Number(value)) && Number(value) <= 10) || ALLOWED[kind].includes(value);
+// The kind a unit after a number names; a name made of other letters makes the number part of a name.
+const UNIT_KINDS = { mcores: "mcores", mcore: "mcores", m: "mcores", MiB: "mib", Mi: "mib", MB: "mib", GiB: "gib", Gi: "gib", GB: "gib", TiB: "gib", TB: "gib", bps: "any", ms: "any", x: "any" };
+const COUNT_WORDS = ["workloads", "workload", "nodes", "node", "hosts", "host", "disks", "disk", "clusters", "cluster", "pods", "pod", "containers", "groups"];
+// Korean counters right after a number: pieces, cases, machines, places, times.
+const COUNTERS = ["개", "건", "대", "곳", "회"];
 const isDigit = (char) => char >= "0" && char <= "9";
 const isLetter = (char) => !!char && ((char >= "a" && char <= "z") || (char >= "A" && char <= "Z"));
-// A digit after one of these is part of a name or id (loki-ingester-0, e2-standard-4, m5.large, p95).
-const joinsName = (char) => !!char && (isLetter(char) || isDigit(char) || char === "_" || char === "-" || char === "." || char === "/" || char === ":");
+const RANGE_MARKS = ["-", "~", "–"];
+// A token: letters, digits and the marks names and numbers are written with. A number inside a token
+// that also holds letters (other than a trailing unit) is part of a name or id - loki-ingester-0,
+// e2-standard-4, m5.large, p95, ip-172-31-12-251.ap-northeast-2 - while 40-60% and 3,500mcores are
+// numbers.
+const inToken = (char) => !!char && (isLetter(char) || isDigit(char) || "._-/:~–,%".includes(char));
+const isNameToken = (token) => {
+  let rest = token;
+  while (rest && "._-/:~–,%".includes(rest[rest.length - 1])) rest = rest.slice(0, -1);
+  let end = rest.length;
+  while (end > 0 && isLetter(rest[end - 1])) end--;
+  if (rest.slice(end) in UNIT_KINDS) rest = rest.slice(0, end);
+  for (const char of rest) if (isLetter(char)) return true;
+  return false;
+};
 
 /** The text with unverified numbers marked, and the list of them. Code spans and link targets are skipped. */
 const checkNumbers = (report, known, text) => {
@@ -582,7 +633,7 @@ const checkNumbers = (report, known, text) => {
   let i = 0;
   while (i < report.length) {
     const char = report[i];
-    if (char === "\\x60") {
+    if (char === "\x60") {
       inCode = !inCode;
       out += char;
       i++;
@@ -595,9 +646,18 @@ const checkNumbers = (report, known, text) => {
       i = end;
       continue;
     }
-    if (inCode || !isDigit(char) || joinsName(report[i - 1])) {
+    if (inCode || !isDigit(char)) {
       out += char;
       i++;
+      continue;
+    }
+    let tokenStart = i;
+    while (tokenStart > 0 && inToken(report[tokenStart - 1])) tokenStart--;
+    let tokenEnd = i;
+    while (tokenEnd < report.length && inToken(report[tokenEnd])) tokenEnd++;
+    if (isNameToken(report.slice(tokenStart, tokenEnd))) {
+      out += report.slice(i, tokenEnd);
+      i = tokenEnd;
       continue;
     }
     // The number: digits with thousands commas, then a fraction.
@@ -612,9 +672,33 @@ const checkNumbers = (report, known, text) => {
     while (isLetter(report[k])) k++;
     const stuck = report.slice(j, k);
     const raw = report.slice(i, j);
-    const partOfName = (stuck && !UNITS.includes(stuck)) || ((report[j] === "-" || report[j] === "_") && (isLetter(report[j + 1]) || isDigit(report[j + 1])));
+    const partOfName = (stuck && !(stuck in UNIT_KINDS)) || (report[j] === "-" && isLetter(report[j + 1])) || (report[j] === "_" && (isLetter(report[j + 1]) || isDigit(report[j + 1])));
+    // The unit: stuck letters, a percent sign or Korean counter, or a word after one space. The first
+    // number of a range (11~19 mcores) takes the unit after the range's last number.
+    let u = j;
+    if (!stuck && RANGE_MARKS.includes(report[u]) && isDigit(report[u + 1])) {
+      u++;
+      while (u < report.length && (isDigit(report[u]) || report[u] === "," || report[u] === ".")) u++;
+    }
+    let w = u;
+    while (isLetter(report[w])) w++;
+    const unit = stuck || report.slice(u, w);
+    let kind = "any";
+    if (unit) {
+      kind = UNIT_KINDS[unit] ?? "any";
+    } else if (report[u] === "%") {
+      kind = "percent";
+    } else if (COUNTERS.includes(report[u])) {
+      kind = "count";
+    } else if (report[u] === " ") {
+      let v = u + 1;
+      while (isLetter(report[v])) v++;
+      const word = report.slice(u + 1, v);
+      if (word in UNIT_KINDS) kind = UNIT_KINDS[word];
+      else if (COUNT_WORDS.includes(word)) kind = "count";
+    }
     const value = String(Number(raw.split(",").join("")));
-    if (partOfName || ALLOWED.has(value) || known.has(value)) {
+    if (partOfName || isAllowed(kind, value) || known[kind].has(value)) {
       out += report.slice(i, k);
     } else {
       out += report.slice(i, k) + "⚠";
@@ -719,7 +803,7 @@ async function collect(execution_id) {
   const covered = DOMAINS.filter((entry) => scope[entry.domain] === true);
   const reports = [];
   // Every number of every query, for checking the summary, which spans the domains.
-  const allKnown = new Set();
+  const allKnown = newKnown();
   for (const entry of covered) {
     let report = "";
     try {
@@ -730,7 +814,7 @@ async function collect(execution_id) {
     }
     // The data tables, drawn here from each query task's records - never copied by the AI.
     const data = [];
-    const known = new Set();
+    const known = newKnown();
     for (const item of entry.queries) {
       let records = null;
       try {
