@@ -20,6 +20,8 @@ import { answerLanguageLine } from "./problemAnalysis";
  */
 
 /**
+ * v6: email and notebook together ("both", the email links the notebook); Assist's disclaimer is
+ * caught in any wording.
  * v5: one email with every report instead of one per domain; the domains chain on their reports.
  * v4: the cleanup really uses the trash (see cleanupScript); v3's script deleted for good.
  * v3: titled "[Ops Navigator] ..." - Dynatrace's own template is "Infrastructure Optimization Agent",
@@ -27,7 +29,7 @@ import { answerLanguageLine } from "./problemAnalysis";
  * to the trash (CLEANUP_TASK).
  * v2: the notebook's title names the domains it covers, and it gets a description.
  */
-export const INFRA_TEMPLATE_VERSION = 5;
+export const INFRA_TEMPLATE_VERSION = 6;
 export const INFRA_WORKFLOW_TITLE = "[Ops Navigator] Infrastructure Optimization";
 /** Finds every version, v1-v2 titled like Dynatrace's template included; the marker decides. */
 export const INFRA_WORKFLOW_SEARCH = "Infrastructure Optimization";
@@ -40,7 +42,8 @@ export const INFRA_MARKER_PATTERN = /ops-navigator infra-optimization template v
 const MARKER = `ops-navigator infra-optimization template v${INFRA_TEMPLATE_VERSION}`;
 
 export type InfraDomain = "kubernetes" | "host" | "disk" | "network";
-export type InfraDelivery = "email" | "notebook";
+/** "both": the notebook is made first and the email links to it. */
+export type InfraDelivery = "email" | "notebook" | "both";
 export type InfraLanguage = "Korean" | "English";
 export type InfraOptimizationInput = {
   scope: Record<InfraDomain, boolean>;
@@ -102,7 +105,8 @@ const QUERY_TITLES: Record<InfraQueryName, Record<InfraLanguage, string>> = {
 // ---- Expressions ---------------------------------------------------------------------------------
 
 const inScope = (domain: InfraDomain) => `input()["scope"]["${domain}"]`;
-const BY_EMAIL = `input()["delivery"] == "email"`;
+const BY_EMAIL = `input()["delivery"] in ["email", "both"]`;
+const BY_NOTEBOOK = `input()["delivery"] in ["notebook", "both"]`;
 const IS_ENGLISH = `input()["language"] == "English"`;
 /** A Jinja string literal; the texts here hold no double quotes, this guards that. */
 const literal = (text: string) => {
@@ -258,7 +262,10 @@ const TEXT = {
     missingList: "리포트를 받지 못한 영역",
     data: "원본 데이터 쿼리",
     footer: "Ops Navigator의 Infrastructure Optimization 워크플로가 생성했습니다. 리포트는 Dynatrace 생성형 AI가 작성했으며, 아래 쿼리로 원본 데이터를 다시 확인할 수 있습니다.",
-    mailFooter: "Ops Navigator의 Infrastructure Optimization 워크플로가 보낸 메일입니다. 리포트는 Dynatrace 생성형 AI가 작성했습니다. 원본 데이터는 결과 전달을 노트북으로 바꿔 실행하거나, Workflows 앱의 실행 기록에서 각 쿼리 태스크의 결과로 확인할 수 있습니다.",
+    mailFooter: "Ops Navigator의 Infrastructure Optimization 워크플로가 보낸 메일입니다. 리포트는 Dynatrace 생성형 AI가 작성했습니다. 원본 데이터는 결과 전달에 노트북을 함께 선택해 실행하거나, Workflows 앱의 실행 기록에서 각 쿼리 태스크의 결과로 확인할 수 있습니다.",
+    mailFooterLinked: "Ops Navigator의 Infrastructure Optimization 워크플로가 보낸 메일입니다. 리포트는 Dynatrace 생성형 AI가 작성했습니다. 원본 데이터 쿼리는 위 노트북에서 확인할 수 있습니다.",
+    notebook: "노트북",
+    notebookLink: "원본 데이터 쿼리와 함께 보기",
   },
   English: {
     name: "[Infra Optimization] ",
@@ -273,12 +280,17 @@ const TEXT = {
     missingList: "No report for",
     data: "Raw data queries",
     footer: "Created by the Infrastructure Optimization workflow of Ops Navigator. The reports are written by Dynatrace generative AI; the queries below show the data behind them.",
-    mailFooter: "Sent by the Infrastructure Optimization workflow of Ops Navigator. The reports are written by Dynatrace generative AI. For the raw data, run with notebook delivery, or open the run in the Workflows app and look at each query task's result.",
+    mailFooter: "Sent by the Infrastructure Optimization workflow of Ops Navigator. The reports are written by Dynatrace generative AI. For the raw data, also choose notebook delivery, or open the run in the Workflows app and look at each query task's result.",
+    mailFooterLinked: "Sent by the Infrastructure Optimization workflow of Ops Navigator. The reports are written by Dynatrace generative AI. The raw data queries are in the notebook above.",
+    notebook: "Notebook",
+    notebookLink: "open with the raw data queries",
   },
 };
 
-// Assist appends this to non-English answers ("Dynatrace Assist는 공식적으로 영어로만 지원되며 ...").
-const LANGUAGE_NOTE = /^.*(영어로만 지원|only (officially )?supported in English).*$/gm;
+// Assist appends a disclaimer to non-English answers, worded differently each time ("Dynatrace Assist는
+// 공식적으로 영어로만 지원되며 ...", "참고: Dynatrace Assist는 공식적으로 영어만 지원되며 ..."). Any line
+// naming Assist, English and support goes, whatever the order or wording.
+const LANGUAGE_NOTE = /^(?=.*Dynatrace Assist)(?=.*(영어|English))(?=.*(지원|support)).*$|^.*(영어로?만 지원|only (officially )?supported in English).*$/gim;
 // Removing it can leave blank lines and a rule right under the title ("# ...\\n\\n\\n\\n---"); both go.
 const tidy = (report) => report.replace(LANGUAGE_NOTE, "").replace(/\\n{3,}/g, "\\n\\n").replace(/^(#{1,6} [^\\n]*)\\n+---[ \\t]*\\n+/m, "$1\\n\\n").trim();
 
@@ -352,9 +364,10 @@ export default async function ({ execution_id }) {
 `;
 
 /**
- * The one email (delivery: email): every report of the run in a single markdown body, with the same
- * title the notebook would get as its subject. Raw data stays out - it made the template's Kubernetes
- * mail long and unreadable; the footer says where to find it.
+ * The one email (delivery: email or both): every report of the run in a single markdown body, with the
+ * same title the notebook gets as its subject. Raw data stays out - it made the template's Kubernetes
+ * mail long and unreadable. With "both" the notebook is made first and linked at the top; otherwise
+ * the footer says where the raw data is.
  */
 const composeEmailScript = () => `// ${MARKER}
 import { executionsClient } from "@dynatrace-sdk/client-automation";
@@ -362,14 +375,23 @@ import { executionsClient } from "@dynatrace-sdk/client-automation";
 ${collectReports()}
 export default async function ({ execution_id }) {
   const { language, text, stamp, reports, title, missing, scopeLine } = await collect(execution_id);
-  const parts = [text.heading, "**" + text.createdAt + ":** " + stamp + "  \\n**" + text.scope + ":** " + scopeLine + (missing.length > 0 ? "  \\n**" + text.missingList + ":** " + missing.join(", ") : "")];
+  // The notebook this run made, if it made one (delivery: both); skipped or failed -> no link.
+  let notebookUrl = null;
+  try {
+    const task = await executionsClient.getTaskExecution({ executionId: execution_id, id: "${NOTEBOOK_TASK}" });
+    notebookUrl = typeof task.result?.url === "string" ? task.result.url : null;
+  } catch (error) {
+    notebookUrl = null;
+  }
+  const link = notebookUrl ? "  \\n**" + text.notebook + ":** [" + text.notebookLink + "](" + notebookUrl + ")" : "";
+  const parts = [text.heading, "**" + text.createdAt + ":** " + stamp + "  \\n**" + text.scope + ":** " + scopeLine + (missing.length > 0 ? "  \\n**" + text.missingList + ":** " + missing.join(", ") : "") + link];
   for (const { entry, report } of reports) {
     parts.push("---");
     parts.push(report ? report : "## " + entry.title[language] + "\\n\\n" + text.missing);
   }
   parts.push("---");
-  parts.push("_" + text.mailFooter + "_");
-  return { subject: title, body: parts.join("\\n\\n") };
+  parts.push("_" + (notebookUrl ? text.mailFooterLinked : text.mailFooter) + "_");
+  return { subject: title, body: parts.join("\\n\\n"), notebookUrl };
 }
 `;
 
@@ -457,15 +479,25 @@ const taskDefinitions = (): Record<string, TaskDefinition> => ({
   network_updown_interfaces: query("network_updown_interfaces", "network", { x: -1, y: 7 }, "disk_report_prompt"),
   network_saturated_interfaces: query("network_saturated_interfaces", "network", { x: 0, y: 7 }, "disk_report_prompt"),
   network_report_prompt: prompt("network", { x: 0, y: 8 }, NETWORK_PROMPT, "", `{\n  "Saturated interfaces": ${records("network_saturated_interfaces")},\n  "Up/Down interfaces": ${records("network_updown_interfaces")}\n}`),
-  // Delivery: one email or one notebook with every report, after the last domain (ANY - the reports
-  // that did come out go out when a later domain failed).
-  [COMPOSE_EMAIL_TASK]: {
+  // Delivery: one notebook and/or one email with every report, after the last domain (ANY - the
+  // reports that did come out go out when a later domain failed). The notebook comes first so the
+  // email can link to it.
+  [NOTEBOOK_TASK]: {
     action: "dynatrace.automations:run-javascript",
-    description: "Puts every report of the run into one email body (delivery: email)",
-    input: { script: composeEmailScript() },
+    description: "Saves every report of the run, with its queries, as one notebook (delivery: notebook or both)",
+    input: { script: notebookScript() },
     position: { x: 0, y: 9 },
     predecessors: ["network_report_prompt"],
-    conditions: { states: { network_report_prompt: "ANY" }, custom: `{{ ${BY_EMAIL} }}`, else: "SKIP" },
+    conditions: { states: { network_report_prompt: "ANY" }, custom: `{{ ${BY_NOTEBOOK} }}`, else: "SKIP" },
+  },
+  [COMPOSE_EMAIL_TASK]: {
+    action: "dynatrace.automations:run-javascript",
+    description: "Puts every report of the run into one email body, linking the notebook when there is one (delivery: email or both)",
+    input: { script: composeEmailScript() },
+    position: { x: 0, y: 10 },
+    predecessors: [NOTEBOOK_TASK],
+    // ANY: a skipped notebook (email only) or a failed one still lets the email go out.
+    conditions: { states: { [NOTEBOOK_TASK]: "ANY" }, custom: `{{ ${BY_EMAIL} }}`, else: "SKIP" },
   },
   [EMAIL_TASK]: {
     action: "dynatrace.email:send-email",
@@ -477,17 +509,9 @@ const taskDefinitions = (): Record<string, TaskDefinition> => ({
       subject: `{{ result("${COMPOSE_EMAIL_TASK}")["subject"] }}`,
       content: `{{ result("${COMPOSE_EMAIL_TASK}")["body"] }}`,
     },
-    position: { x: 0, y: 10 },
+    position: { x: 0, y: 11 },
     predecessors: [COMPOSE_EMAIL_TASK],
     conditions: { states: { [COMPOSE_EMAIL_TASK]: "OK" }, custom: `{{ ${BY_EMAIL} }}`, else: "SKIP" },
-  },
-  [NOTEBOOK_TASK]: {
-    action: "dynatrace.automations:run-javascript",
-    description: "Saves every report of the run, with its queries, as one notebook (delivery: notebook)",
-    input: { script: notebookScript() },
-    position: { x: 1, y: 9 },
-    predecessors: ["network_report_prompt"],
-    conditions: { states: { network_report_prompt: "ANY" }, custom: `{{ input()["delivery"] == "notebook" }}`, else: "SKIP" },
   },
 });
 
@@ -531,6 +555,6 @@ export const summarizeInfraInput = (input: unknown): string | null => {
   const domains = INFRA_DOMAINS.filter((domain) => scope[domain] === true).map((domain) => DOMAINS[domain].short.Korean);
   const all = domains.length === INFRA_DOMAINS.length ? "전체" : domains.join("·") || "범위 없음";
   const recipients = emails?.to?.length ? ` (${emails.to.join(", ")})` : "";
-  const how = delivery === "notebook" ? "노트북" : `이메일${recipients}`;
+  const how = delivery === "notebook" ? "노트북" : delivery === "both" ? `이메일${recipients} + 노트북` : `이메일${recipients}`;
   return `${all} / ${how} / ${language === "English" ? "English" : "한국어"}`;
 };

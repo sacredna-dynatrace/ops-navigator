@@ -119,7 +119,10 @@ const InfraOptimizationCard = () => {
     });
     return () => { cancelled = true; };
   }, []);
-  const [delivery, setDelivery] = useState<InfraDelivery>(DEFAULT_INFRA_INPUT.delivery);
+  // Two independent choices, stored as one workflow input: "email", "notebook" or "both".
+  const [byEmail, setByEmail] = useState(DEFAULT_INFRA_INPUT.delivery !== "notebook");
+  const [byNotebook, setByNotebook] = useState(DEFAULT_INFRA_INPUT.delivery !== "email");
+  const delivery: InfraDelivery | null = byEmail && byNotebook ? "both" : byEmail ? "email" : byNotebook ? "notebook" : null;
   const [language, setLanguage] = useState<InfraLanguage>(DEFAULT_INFRA_INPUT.language);
   const [to, setTo] = useState("");
   const [cc, setCc] = useState("");
@@ -133,14 +136,15 @@ const InfraOptimizationCard = () => {
   const invalid = [...recipients.to, ...recipients.cc, ...recipients.bcc].filter((address) => !isEmailAddress(address));
   const problems = [
     !INFRA_DOMAINS.some((domain) => scope[domain]) && "분석 범위를 하나 이상 고르세요.",
-    delivery === "email" && recipients.to.length === 0 && "받는 사람(To)을 한 명 이상 입력하세요.",
-    delivery === "email" && invalid.length > 0 && `이메일 주소 형식이 아닙니다: ${invalid.join(", ")}`,
+    delivery === null && "결과 전달 방식을 하나 이상 고르세요.",
+    byEmail && recipients.to.length === 0 && "받는 사람(To)을 한 명 이상 입력하세요.",
+    byEmail && invalid.length > 0 && `이메일 주소 형식이 아닙니다: ${invalid.join(", ")}`,
   ].filter((problem): problem is string => typeof problem === "string");
 
   // The whole definition goes into the link, so it is rebuilt only when an option changes.
   const createLink = useMemo(
-    () => createInfraWorkflowLink({ scope, delivery, language, emails: delivery === "email" ? recipients : { to: [], cc: [], bcc: [] } }),
-    [scope, delivery, language, recipients],
+    () => createInfraWorkflowLink({ scope, delivery: delivery ?? "email", language, emails: byEmail ? recipients : { to: [], cc: [], bcc: [] } }),
+    [scope, delivery, byEmail, language, recipients],
   );
 
   const chip =
@@ -172,20 +176,22 @@ const InfraOptimizationCard = () => {
           </div>
         </FieldSet>
 
-        <FormField>
-          <Label>결과 전달</Label>
-          <ToggleButtonGroup value={delivery} onChange={(value: string) => setDelivery(value === "notebook" ? "notebook" : "email")}>
-            <ToggleButtonGroup.Item value="email">이메일</ToggleButtonGroup.Item>
-            <ToggleButtonGroup.Item value="notebook">노트북 생성</ToggleButtonGroup.Item>
-          </ToggleButtonGroup>
-          <p className="automation-note">
-            {delivery === "email"
-              ? "실행할 때마다 모든 리포트를 하나로 묶은 메일 한 통을 보냅니다. 제목에 분석 범위가 들어갑니다."
-              : "실행할 때마다 모든 리포트와 원본 데이터 쿼리를 담은 노트북 하나를 workflow 실행자 이름으로 만듭니다. 제목에 분석 범위가 들어갑니다."}
-          </p>
-        </FormField>
+        <FieldSet>
+          <FieldSet.Legend>결과 전달 (하나 이상)</FieldSet.Legend>
+          <div className="automation-scope">
+            <div>
+              <Checkbox id="automation-delivery-email" name="delivery-email" value={byEmail} onChange={(checked: boolean) => setByEmail(checked)}>이메일</Checkbox>
+              <span className="automation-note">모든 리포트를 하나로 묶은 메일 한 통. 제목에 분석 범위가 들어갑니다.</span>
+            </div>
+            <div>
+              <Checkbox id="automation-delivery-notebook" name="delivery-notebook" value={byNotebook} onChange={(checked: boolean) => setByNotebook(checked)}>노트북 생성</Checkbox>
+              <span className="automation-note">모든 리포트와 원본 데이터 쿼리를 담은 노트북 하나 (workflow 실행자 이름으로 생성).</span>
+            </div>
+          </div>
+          {byEmail && byNotebook && <p className="automation-note">둘 다 고르면 노트북을 먼저 만들고, 메일 맨 위에 그 노트북 링크를 넣습니다.</p>}
+        </FieldSet>
 
-        {delivery === "email" && (
+        {byEmail && (
           <div className="automation-emails">
             <FormField>
               <Label>받는 사람 (To)</Label>
