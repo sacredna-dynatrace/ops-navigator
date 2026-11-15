@@ -160,7 +160,7 @@ ui/
     pages/
       BlastRadius.tsx        # "/blast-radius" route (landing page; "/" redirects here) — a Davis problem drawn as rings around its root cause
       Home.tsx               # "/topology" route — topology map
-      Automation.tsx         # "/automation" route (leftmost nav item) — cards that create ready-made workflows
+      Automation.tsx         # "/automation" route (rightmost nav item) — cards that create ready-made workflows
   assets/                    # Static images and SVGs bundled with the app
   app/problemAnalysis.ts     # Analyze-problem prompt (no imports) - shared by the page and the action
 actions/
