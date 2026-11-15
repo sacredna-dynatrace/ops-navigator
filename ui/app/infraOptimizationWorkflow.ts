@@ -20,6 +20,9 @@ import { answerLanguageLine } from "./problemAnalysis";
  */
 
 /**
+ * v12: numbers in the AI's text that no query returned are marked and listed under the report
+ * (checkNumbers) - the first check caught "8,610 / (3,500 x 0.85) = 3.26, so 4 nodes" (2.89; the
+ * query says 3).
  * v11: the notebook and email draw the data tables from the query results (TABLES) and the AI writes
  * the text around them; clusters give minimum_nodes and the resource that sets it, workloads their
  * analyzed and left-out totals; the summary keeps each number with its item.
@@ -42,7 +45,7 @@ import { answerLanguageLine } from "./problemAnalysis";
  * to the trash (CLEANUP_TASK).
  * v2: the notebook's title names the domains it covers, and it gets a description.
  */
-export const INFRA_TEMPLATE_VERSION = 11;
+export const INFRA_TEMPLATE_VERSION = 12;
 export const INFRA_WORKFLOW_TITLE = "[Ops Navigator] Infrastructure Optimization";
 /** Finds every version, v1-v2 titled like Dynatrace's template included; the marker decides. */
 export const INFRA_WORKFLOW_SEARCH = "Infrastructure Optimization";
@@ -542,6 +545,88 @@ const renderData = (spec, records, language, text) => {
   return parts.join(NL + NL);
 };
 
+// ---- Number check: every number the AI writes must be in the data it was given ----------------
+// The text is the AI's, the tables are not; a number in the text that no query returned was computed,
+// guessed or moved from another item (notebook 3869dd80: "throttling 20,414 mcores" on the wrong
+// workload, "311 workloads" for 94). Such numbers get a mark and are listed under the report.
+
+// Every number in the records, also rounded the ways a text writes them (12.0 -> 12, 7829.43 -> 7829.4).
+const collectNumbers = (value, into) => {
+  if (Array.isArray(value)) {
+    for (const item of value) collectNumbers(item, into);
+  } else if (value !== null && typeof value === "object") {
+    for (const item of Object.values(value)) collectNumbers(item, into);
+  } else {
+    const number = typeof value === "number" ? value : typeof value === "string" && value.trim() !== "" ? Number(value) : NaN;
+    if (Number.isFinite(number)) {
+      for (const form of [number, Math.round(number), Math.round(number * 10) / 10, Math.round(number * 100) / 100]) into.add(String(Math.abs(form)));
+    }
+  }
+  return into;
+};
+// Small numbers (list items, counts of a few) and the thresholds and factors the rules name.
+const ALLOWED = new Set(["7", "15", "20", "30", "40", "50", "64", "80", "85", "90", "95", "99", "100", "120", "125", "130", "150", "200", "0.4", "0.85", "0.9", "1.2", "1.25", "1.3", "1.5", "2.5"]);
+for (let small = 0; small <= 10; small++) ALLOWED.add(String(small));
+// Letters right after a number that make it a value with a unit rather than part of a name.
+const UNITS = ["mcores", "mcore", "GiB", "MiB", "TiB", "GB", "MB", "TB", "Gi", "Mi", "bps", "ms", "m", "x"];
+const isDigit = (char) => char >= "0" && char <= "9";
+const isLetter = (char) => !!char && ((char >= "a" && char <= "z") || (char >= "A" && char <= "Z"));
+// A digit after one of these is part of a name or id (loki-ingester-0, e2-standard-4, m5.large, p95).
+const joinsName = (char) => !!char && (isLetter(char) || isDigit(char) || char === "_" || char === "-" || char === "." || char === "/" || char === ":");
+
+/** The text with unverified numbers marked, and the list of them. Code spans and link targets are skipped. */
+const checkNumbers = (report, known, text) => {
+  let out = "";
+  let inCode = false;
+  const flagged = [];
+  let i = 0;
+  while (i < report.length) {
+    const char = report[i];
+    if (char === "\\x60") {
+      inCode = !inCode;
+      out += char;
+      i++;
+      continue;
+    }
+    if (!inCode && char === "]" && report[i + 1] === "(") {
+      const close = report.indexOf(")", i);
+      const end = close < 0 ? report.length : close + 1;
+      out += report.slice(i, end);
+      i = end;
+      continue;
+    }
+    if (inCode || !isDigit(char) || joinsName(report[i - 1])) {
+      out += char;
+      i++;
+      continue;
+    }
+    // The number: digits with thousands commas, then a fraction.
+    let j = i;
+    while (j < report.length && (isDigit(report[j]) || (report[j] === "," && isDigit(report[j + 1]) && isDigit(report[j + 2]) && isDigit(report[j + 3]) && !isDigit(report[j + 4])))) j++;
+    if (report[j] === "." && isDigit(report[j + 1])) {
+      j++;
+      while (j < report.length && isDigit(report[j])) j++;
+    }
+    // Letters stuck to it: a unit, or else the number is part of a name.
+    let k = j;
+    while (isLetter(report[k])) k++;
+    const stuck = report.slice(j, k);
+    const raw = report.slice(i, j);
+    const partOfName = (stuck && !UNITS.includes(stuck)) || ((report[j] === "-" || report[j] === "_") && (isLetter(report[j + 1]) || isDigit(report[j + 1])));
+    const value = String(Number(raw.split(",").join("")));
+    if (partOfName || ALLOWED.has(value) || known.has(value)) {
+      out += report.slice(i, k);
+    } else {
+      out += report.slice(i, k) + "⚠";
+      if (!flagged.includes(raw)) flagged.push(raw);
+    }
+    i = k;
+  }
+  if (flagged.length === 0) return { text: report, flagged };
+  const listed = flagged.slice(0, 12).join(", ") + (flagged.length > 12 ? " " + text.more(flagged.length - 12) : "");
+  return { text: out + NL + NL + "> ⚠ " + text.unverified + listed, flagged };
+};
+
 const TEXT = {
   Korean: {
     name: "[인프라 최적화] ",
@@ -574,6 +659,7 @@ const TEXT = {
     none: "해당 항목이 없습니다.",
     more: (rest) => "외 " + rest + "개는 생략했습니다.",
     sample: (shown, total) => "전체 " + total + "개 중 " + shown + "개 예시입니다.",
+    unverified: "데이터에서 찾지 못한 수치입니다. AI가 계산하거나 추정한 값일 수 있으니 아래 표의 값으로 확인하세요: ",
   },
   English: {
     name: "[Infra Optimization] ",
@@ -606,6 +692,7 @@ const TEXT = {
     none: "None.",
     more: (rest) => rest + " more not shown.",
     sample: (shown, total) => shown + " examples of " + total + ".",
+    unverified: "Numbers not found in the data - the AI may have computed or estimated them, so check them against the tables: ",
   },
 };
 
@@ -631,6 +718,8 @@ async function collect(execution_id) {
 
   const covered = DOMAINS.filter((entry) => scope[entry.domain] === true);
   const reports = [];
+  // Every number of every query, for checking the summary, which spans the domains.
+  const allKnown = new Set();
   for (const entry of covered) {
     let report = "";
     try {
@@ -641,6 +730,7 @@ async function collect(execution_id) {
     }
     // The data tables, drawn here from each query task's records - never copied by the AI.
     const data = [];
+    const known = new Set();
     for (const item of entry.queries) {
       let records = null;
       try {
@@ -649,9 +739,12 @@ async function collect(execution_id) {
       } catch (error) {
         records = null;
       }
+      collectNumbers(records, known);
+      collectNumbers(records, allKnown);
       data.push("#### " + item.title[language] + NL + NL + renderData(item.table, records, language, text));
     }
-    reports.push({ entry, report, data: "### " + entry.title[language] + " - " + text.tables + NL + NL + data.join(NL + NL) });
+    const checked = report ? checkNumbers(report, known, text) : { text: "", flagged: [] };
+    reports.push({ entry, report: checked.text, flagged: checked.flagged, data: "### " + entry.title[language] + " - " + text.tables + NL + NL + data.join(NL + NL) });
   }
 
   // Titles and subjects name the domains that produced a report ("All" for all four): a list of
@@ -669,6 +762,7 @@ async function collect(execution_id) {
   try {
     const task = await executionsClient.getTaskExecution({ executionId: execution_id, id: "${SUMMARY_TASK}" });
     summary = tidy(String(task.result?.text ?? ""));
+    if (summary) summary = checkNumbers(summary, allKnown, text).text;
   } catch (error) {
     summary = "";
   }
