@@ -96,7 +96,7 @@ writeFileSync(
   "const executionsClient = { getExecution: (args) => globalThis.__infraExecutions.getExecution(args), getTaskExecution: (args) => globalThis.__infraExecutions.getTaskExecution(args) };\n" +
     "const getEnvironmentUrl = () => globalThis.__infraEnvironment;\n" +
     template.infraReportScript() +
-    "\nexport { renderData, checkData, checkNumbers, newKnown, collectNumbers, collect, DOMAINS, TEXT };\n",
+    "\nexport { renderData, checkData, checkNumbers, newKnown, collectNumbers, collect, rankActions, DOMAINS, TEXT };\n",
 );
 const report = await import(pathToFileURL(reportFile).href + "?" + Date.now());
 
@@ -110,7 +110,7 @@ const checkSet = (byName) => {
   return issues;
 };
 
-/** collect() on saved results, as the notebook task would run it - no AI text. */
+/** collect() on saved results, as the notebook task would run it - no AI answer, so the fallback key actions. */
 const render = async (byName, language) => {
   const scope = Object.fromEntries(report.DOMAINS.map((entry) => [entry.domain, entry.queries.some((item) => byName[item.name])]));
   globalThis.__infraEnvironment = "https://example.apps.dynatrace.com";
@@ -125,7 +125,8 @@ const render = async (byName, language) => {
     },
   };
   const result = await report.collect("test");
-  return result.reports.map((item) => item.data).join("\n\n");
+  const candidates = report.rankActions(byName, language, scope).map((line, index) => index + 1 + ". " + line);
+  return ["## Key-action candidates (rank_actions)", candidates.join("\n"), "## Key actions (fallback)", result.summary, ...result.reports.flatMap((item) => [item.report, item.data])].join("\n\n");
 };
 
 // 3. Saved result sets.
@@ -144,9 +145,9 @@ for (const set of sets) {
   for (const language of ["Korean", "English"]) {
     const text = await render(byName, language);
     writeFileSync(join(work, `${set}-${language}.md`), text);
-    const bad = ["undefined", "NaN", "[object Object]"].filter((word) => text.includes(word));
-    if (bad.length > 0) fail(`${set} (${language}): the tables show ${bad.join(", ")}`);
-    else ok(`${set} (${language}): tables render (tmp/infra-check/${set}-${language}.md)`);
+    const bad = ["undefined", "NaN", "[object Object]", " null", "null "].filter((word) => text.includes(word));
+    if (bad.length > 0) fail(`${set} (${language}): the report shows ${bad.join(", ")}`);
+    else ok(`${set} (${language}): report, candidates and tables render (tmp/infra-check/${set}-${language}.md)`);
   }
 }
 

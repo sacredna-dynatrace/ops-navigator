@@ -167,6 +167,7 @@ actions/
   build-analysis-prompt.action.ts  # Workflow action: builds the Analyze-problem prompt for a Davis problem
 ui/app/analyzeWorkflow.ts          # Analyze Problem workflows (SRE agent): template, create intent, run event, result
 ui/app/infraOptimizationWorkflow.ts # Infrastructure Optimization Agent template (no SDK imports): email/notebook delivery, Korean/English
+ui/app/infraReportText.ts          # Its report text: finding meanings, table notes, the report writer and the key-action ranking
 ui/app/infraOptimizationQueries.ts  # Its DQL as generated JSON strings - do not edit; generated from infra-queries/*.dql
 infra-queries/*.dql                 # The infra template's queries, one file each (npm run gen:infra-queries)
 scripts/infra-check.mjs             # npm run test:infra - checks the infra template on saved and live query results
@@ -268,3 +269,5 @@ edges, because the busiest services and the busiest hosts are different entities
   other (`checkData` - the same code the workflow runs), plus the synthetic sets and the number check.
   A bug found in a report gets a synthetic set or a number-check case, so it cannot come back.
   Fix a report problem in the query or the data check first; a prompt rule is the last resort.
+  The reports are fixed sentences from the records (`infraReportText.ts`); the AI only words the key
+  actions from `rank_actions`' candidates. A wrong meaning is fixed in `MEANINGS` once, not in a prompt.

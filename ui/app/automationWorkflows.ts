@@ -107,7 +107,7 @@ export const findInfraWorkflows = async (): Promise<CreatedWorkflow[]> => {
 
 /**
  * What the workflow uses, for its Authorization settings when they are set to a custom selection:
- * Grail reads for the queries, generative AI for the reports, email or a notebook for delivery, and
+ * Grail reads for the queries, generative AI for the key actions, email or a notebook for delivery, and
  * the run's own task results for the notebook, and deleting workflows for the cleanup of older versions.
  */
 export const INFRA_WORKFLOW_PERMISSIONS = [

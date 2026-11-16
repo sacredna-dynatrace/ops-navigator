@@ -238,7 +238,7 @@ const InfraOptimizationCard = () => {
         <div>
           <h2>{INFRA_WORKFLOW_TITLE}</h2>
           <p className="automation-note">
-            Grail에서 Kubernetes·호스트·디스크·네트워크 사용률을 조회하고, Dynatrace 생성형 AI가 비용을 줄이고 위험을 낮추는 최적화 리포트를 씁니다.
+            Grail에서 Kubernetes·호스트·디스크·네트워크 사용률을 조회해 비용을 줄이고 위험을 낮추는 최적화 리포트를 만들고, Dynatrace 생성형 AI가 핵심 조치를 요약합니다.
             리포트는 이메일로 보내거나 노트북 하나로 저장합니다.
           </p>
         </div>

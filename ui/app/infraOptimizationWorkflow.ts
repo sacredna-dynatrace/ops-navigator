@@ -1,9 +1,10 @@
 import { INFRA_QUERIES, type InfraQueryName } from "./infraOptimizationQueries";
+import { MEANING_KINDS, REPORT_WRITER, TABLE_NOTES } from "./infraReportText";
 import { answerLanguageLine } from "./problemAnalysis";
 
 /**
  * The Infrastructure Optimization Agent workflow, built from Dynatrace's template (host, disk,
- * Kubernetes and network sizing: Grail queries -> Davis generative AI -> report), with what the
+ * Kubernetes and network sizing: Grail queries -> report), with what the
  * Automation page adds:
  * - **delivery**: one email with every report (the template sent one per domain) or one notebook with
  *   every report and the queries behind it;
@@ -20,6 +21,13 @@ import { answerLanguageLine } from "./problemAnalysis";
  */
 
 /**
+ * v20: the scripts write the reports (infraReportText.ts) - each finding's meaning and change as a
+ * fixed sentence under its table, and each domain's overview, node counts and priorities from the
+ * records. The four per-domain AI reports are gone: every run brought a new kind of mistake in them
+ * (throttling blamed on the requests, "0개" findings, a workload in the wrong cluster, a value from
+ * the row below). The AI only picks the key actions from a ranked list that carries the numbers
+ * (rank_actions); the resources line under them is the script's. The queries no longer wait on the
+ * reports, so they run side by side.
  * v19: the queries checked against Kubernetes' own rules instead of report by report - unset requests
  * and limits are null (a sum made them 0, so NO_REQUESTS_SET and NO_LIMIT_SET never fired), memory is
  * summed per container like CPU, the replicas count in the after-rightsizing totals (a DaemonSet on 4
@@ -73,7 +81,7 @@ import { answerLanguageLine } from "./problemAnalysis";
  * to the trash (CLEANUP_TASK).
  * v2: the notebook's title names the domains it covers, and it gets a description.
  */
-export const INFRA_TEMPLATE_VERSION = 19;
+export const INFRA_TEMPLATE_VERSION = 20;
 export const INFRA_WORKFLOW_TITLE = "[Ops Navigator] Infrastructure Optimization";
 /** Finds every version, v1-v2 titled like Dynatrace's template included; the marker decides. */
 export const INFRA_WORKFLOW_SEARCH = "Infrastructure Optimization";
@@ -82,6 +90,7 @@ export const NOTEBOOK_TASK = "publish_notebook";
 export const COMPOSE_EMAIL_TASK = "compose_email";
 export const EMAIL_TASK = "email_report";
 export const SUMMARY_TASK = "summary_prompt";
+export const RANK_TASK = "rank_actions";
 /** In the notebook task's script - the intent drops a workflow description - to recognize our workflow. */
 export const INFRA_MARKER_PATTERN = /ops-navigator infra-optimization template v(\d+)/;
 const MARKER = `ops-navigator infra-optimization template v${INFRA_TEMPLATE_VERSION}`;
@@ -107,31 +116,27 @@ export const DEFAULT_INFRA_INPUT: InfraOptimizationInput = {
   emails: { to: [], cc: [], bcc: [] },
 };
 
-/** What each domain queries and which prompt task writes its report. */
-const DOMAINS: Record<InfraDomain, { prompt: string; queries: InfraQueryName[]; title: Record<InfraLanguage, string>; short: Record<InfraLanguage, string>; period: Record<InfraLanguage, string> }> = {
+/** What each domain queries, and its names. */
+const DOMAINS: Record<InfraDomain, { queries: InfraQueryName[]; title: Record<InfraLanguage, string>; short: Record<InfraLanguage, string>; period: Record<InfraLanguage, string> }> = {
   kubernetes: {
-    prompt: "k8s_report_prompt",
     queries: ["k8s_cluster_cpu", "k8s_cluster_memory", "k8s_workload_cpu", "k8s_workload_memory", "k8s_rightsizing"],
     title: { Korean: "Kubernetes 최적화", English: "Kubernetes optimization" },
     short: { Korean: "K8s", English: "K8s" },
     period: { Korean: "7일 p95", English: "7 days, p95" },
   },
   host: {
-    prompt: "host_report_prompt",
     queries: ["host_utilization"],
     title: { Korean: "호스트 최적화", English: "Host optimization" },
     short: { Korean: "호스트", English: "Host" },
     period: { Korean: "30일", English: "30 days" },
   },
   disk: {
-    prompt: "disk_report_prompt",
     queries: ["disk_overutilized", "disk_underutilized"],
     title: { Korean: "디스크 최적화", English: "Disk optimization" },
     short: { Korean: "디스크", English: "Disk" },
     period: { Korean: "30일", English: "30 days" },
   },
   network: {
-    prompt: "network_report_prompt",
     queries: ["network_saturated_interfaces", "network_updown_interfaces"],
     title: { Korean: "네트워크 최적화", English: "Network optimization" },
     short: { Korean: "네트워크", English: "Network" },
@@ -374,42 +379,6 @@ const LANGUAGE_LINE = byLanguage(answerLanguageLine("Korean"), answerLanguageLin
 // Kubernetes and disk reports came back in English (diw85600 test run, 2026-11-15).
 const withLanguage = (instruction: string) => (instruction ? `${LANGUAGE_LINE}\n${instruction}\n${LANGUAGE_LINE}` : LANGUAGE_LINE);
 
-/**
- * A query's records, or QUERY_FAILED when the query errored: the prompts run whatever their queries
- * did (states ANY), and a failed task's `result()` falls back to the default. Checked on diw85600 -
- * the prompt got "bad=QUERY_FAILED; good=[]" and the run ended SUCCESS.
- */
-export const QUERY_FAILED = "QUERY_FAILED";
-const records = (task: string) => `{{ result("${task}")["records"] | default("${QUERY_FAILED}") }}`;
-/** Tells the AI what QUERY_FAILED means, so it reports the gap instead of inventing findings. */
-const FAILED_LINE = `A data set given as ${QUERY_FAILED} could not be collected - its query failed, typically because that data source is not monitored in this environment. Say so briefly for that part, and do not invent findings for it.`;
-/**
- * How to read the data, for every report. Without these the 2026-11-15 Kubernetes report (diw85600,
- * notebook 3976dac3) left most memory cells "-" although every value was there, recommended a 512 MiB
- * request "increase" for a workload already at 1 GiB, called a workload with 0 throttling "heavily
- * throttled", and priced an EC2 host whose instance type read "HVM domU". Told to keep a direction
- * rule, v7 still "raised" a 175 MiB limit to 150, so since v8 the queries compute every
- * recommendation (recommended_* fields) and the AI only presents and explains them.
- */
-const DATA_RULES = [
-  "Data rules: use only values present in the data, exactly as given - they are already in the unit their field name says (_mcores, _mib, _gib, _percent); do not convert or recompute them. Write '-' only for a value that is null in the data.",
-  "Recommended values are already computed: present recommended_request_* and recommended_limit_* exactly as given, and never write a recommended number of your own. A null recommended value means keep the current setting - say 'keep' (유지), not a number. Explain each recommendation briefly from the usage, requests and limits.",
-  "Workload values are per pod - one replica, its containers summed - and pods is the number of replicas; recommendations are per pod too (for a pod with several containers, they are split over its containers). A null request or limit means none is set. Where limits_partial is true, not every container sets a limit, so the pod's limit is not judged and gets no advice - say so once, without numbers.",
-  "Do not write any tables - not even a table of counts - and do not list the examples row by row: data tables with every finding, count and example are added under your text automatically. Write prose and short bullets that interpret the data, and name only the few items that matter most, each with its own numbers.",
-  "For a cluster, state the node counts as given and only in this form: CPU needs nodes_needed_for_cpu nodes and memory nodes_needed_for_memory, so at least minimum_nodes are needed and removable_nodes can go. Never call a resource binding, limiting or constraining (제한/결정 리소스). A node count is the requests divided by (allocatable per node x 0.85), rounded up - usage does not set it.",
-  "Write the workload counts only in this form: of total_workloads workloads, analyzed_workloads were analyzed and excluded_workloads left out (전체 N개 중 M개를 분석하고 K개를 제외). Never add, subtract or otherwise combine counts yourself.",
-  "throttling_p95 is a relative indicator: write it as a bare number, never followed by mcores or any other unit.",
-  "Never use the word scheduling (스케줄링). For what a finding means, use the meanings the Kubernetes report lists - never your own.",
-  "A cluster's finding is its node action, from minimum_nodes: SCALE_DOWN (removable_nodes can go), SCALE_UP (more nodes are needed) or NOMINAL. The memory data has figures only and no finding of its own - never present a memory-only scale-down.",
-  "After pod rightsizing gives each cluster's requests and node counts once every recommended request is applied: say what rightsizing does to the nodes only with the _after fields (nodes_needed_after_for_cpu, nodes_needed_after_for_memory, minimum_nodes_after, removable_nodes_after) - never repeat today's node counts as values after rightsizing - and never guess whether the requests rise or fall. analyzed_cpu_requests_percent and analyzed_mem_requests_percent show, per cluster, how much of the requests (every replica counted) the advice covers; only for a cluster where a share is under 50%, say that most of those requests belong to the pods left out - name them only from that cluster's excluded_names - so sizing them is the larger lever.",
-  "Throttling concerns CPU only - never mention throttling for memory.",
-  "A memory working set within about 1% of its limit can be page cache filling up to the limit: say that raising such a limit may only grow the cache, so check the container's actual need first.",
-  "EXCLUDED_NO_CONTROLLER counts pods without a controller and EXCLUDED_STATIC_POD static pods (the control plane, kube-proxy): they are sized elsewhere. Give each count in one line and no advice, and say what they are only from their sample_names - never assume Spark or any other kind.",
-  "Mention only the findings the data has, under their names as given: never merge findings (no 'OOM and INCREASE_LIMITS'), never add one the data lacks, and never present a finding as included in another.",
-  "Never write money amounts, prices, cost figures or saving percentages - not even as estimates or examples, and whatever the instance type. Name savings only as the resources the data gives: removable_nodes, reclaimable_gib, and the recommended requests and limits.",
-  "Do not list items whose finding is NOMINAL; give their count only.",
-].join("\n");
-
 // ---- Tasks ---------------------------------------------------------------------------------------
 
 type Conditions = { states: Record<string, string>; custom?: string; else?: string };
@@ -425,14 +394,14 @@ type TaskDefinition = {
 
 const PROMPT_RETRY = { count: 2, delay: 30, failedLoopIterationsOnly: true };
 
-const query = (name: InfraQueryName, domain: InfraDomain, position: { x: number; y: number }, after?: string): TaskDefinition => ({
+// Every query starts at once: since v20 no AI report sits between the domains to spread out.
+const query = (name: InfraQueryName, domain: InfraDomain, position: { x: number; y: number }): TaskDefinition => ({
   action: "dynatrace.automations:execute-dql-query",
   description: QUERY_TITLES[name].English,
   input: { query: INFRA_QUERIES[name] },
   position,
-  predecessors: after ? [after] : [],
-  // ANY: a domain whose report or email failed must not keep the next domain from running.
-  conditions: { states: after ? { [after]: "ANY" } : {}, custom: `{{ ${inScope(domain)} }}`, else: "SKIP" },
+  predecessors: [],
+  conditions: { states: {}, custom: `{{ ${inScope(domain)} }}`, else: "SKIP" },
 });
 
 /**
@@ -457,125 +426,35 @@ const promptInput = (prompt: string, instruction: string, supplementary: string)
   return { config: "disabled", autoTrim: true, prompt, instruction, supplementary };
 };
 
-const prompt = (domain: InfraDomain, position: { x: number; y: number }, text: string, instruction: string, supplementary: string): TaskDefinition => ({
-  action: "dynatrace.davis.workflow.actions:prompt-generative-ai",
-  description: `Writes the ${DOMAINS[domain].title.English.toLowerCase()} report with Dynatrace generative AI`,
-  input: promptInput([text, DATA_RULES, FAILED_LINE].join("\n\n"), withLanguage(instruction), supplementary),
-  position,
-  predecessors: DOMAINS[domain].queries,
-  // ANY: one failed query leaves the report to the others (see records()).
-  conditions: { states: Object.fromEntries(DOMAINS[domain].queries.map((name) => [name, "ANY"])), custom: `{{ ${inScope(domain)} }}`, else: "SKIP" },
-  retry: PROMPT_RETRY,
-});
-
-const K8S_DATA = `{
-  "Cluster optimization": {
-    "CPU": ${records("k8s_cluster_cpu")},
-    "Memory": ${records("k8s_cluster_memory")}
-  },
-  "Workload optimization": {
-    "CPU": ${records("k8s_workload_cpu")},
-    "Memory": ${records("k8s_workload_memory")}
-  },
-  "After pod rightsizing": ${records("k8s_rightsizing")}
-}`;
-
-const K8S_PROMPT = `Provide a \`Kubernetes Optimization Report\`, in markdown for these 2 usecases:
-
-# 1. Optimize pod sizing
-Goal: identify pod optimization opportunities and recommend Kubernetes pod \`requests\` and \`limits\` for CPU and memory that reduce OOMKills/throttling while avoiding wasted reserved capacity.
-Use the data provided in the context. Findings and the recommended \`requests\` and \`limits\` are already computed for each example; present them and explain each one from the numbers.
-
-# 2. Optimize cluster sizing
-Goals:
-1. Shutdown unneeded nodes to save on cost, assuming Pods have already been optimized above.
-2. Reduce over-provisioned nodes to save on cost
-3. Increase the size of under-provisioned nodes to reduce risk
-Use the data provided in the context. Findings are already provided for scale; however, still analyze the numbers and produce a recommendation for each example cluster. For instance, you could recommend reducing the number of nodes by 3 or scale down from a \`m7a.2xlarge\` to a \`m7a.large\`.
-A cluster's CPU and memory findings must be read together: the node count can go no lower than minimum_nodes, which the CPU data gives with the resource that sets it.
-
-# Meaning of each finding (use these words, not your own)
-Each workload gets one finding - the most pressing - but its recommended requests and limits are each given on their own: present both where both are set.
-- CPU NO_REQUESTS_SET or INCREASE_REQUESTS: the workload reserves no CPU or less than it uses, so on a busy node it gets less CPU than it needs and slows down. CPU never causes eviction.
-- CPU INCREASE_LIMITS: the workload uses over 90% of its CPU limit and is throttled - the limit caps it.
-- Throttling comes only from a CPU limit, never from the requests: a workload can be throttled while its p95 usage is below the limit, by short bursts that hit it. Never explain throttling with the requests.
-- CPU REDUCE_LIMITS: the limit is far above use. A CPU limit reserves nothing, and under contention every pod still gets its requests, so a high CPU limit only lets the workload use idle CPU; lowering it is optional and makes performance more predictable.
-- CPU or memory REDUCE_REQUESTS: capacity is reserved but not used, which keeps other pods off the node.
-- Memory OOM_KILLS: the container reached its memory limit and was killed (OOM).
-- Memory INCREASE_LIMITS: the working set is within 10% of the limit, so the container is close to an OOM kill.
-- Memory NO_LIMIT_SET: no memory limit - the container can take node memory without bound.
-- Memory NO_REQUESTS_SET or INCREASE_REQUESTS: the workload reserves no memory or less than it uses, so under memory pressure it is among the first evicted.
-- Memory REDUCE_LIMITS: the limit is far above the working set. Memory above the requests is not reserved, so high limits let the node's memory be overcommitted, and under memory pressure the node evicts pods.
-- Requests equal to the limits (Guaranteed QoS) are a sound setting, not a finding.
-
-# Golden rules
-1. Mention every finding with its count from the data - and only those: write nothing about a finding the data does not list, not even that there are none (no "0개"). A finding missing from the CPU data says nothing about throttling.
-2. Use the recommended values from the context as they are; do not adjust them.
-3. Leave the examples to the data tables under the report; name only the most important ones.
-4. Name every workload with its cluster, as the data gives it: name (cluster).`;
-
-const K8S_INSTRUCTION = `Be sure the report includes an overview with total_workloads, analyzed_workloads and excluded_workloads, what each finding means, the priorities, and the resources that can be freed (removable_nodes) - no money amounts.
-Never write scheduling (스케줄링): requests below usage mean less CPU under contention and early eviction under memory pressure.
-Priorities: first OOM kills and limit increases, then every requests increase (all INCREASE_REQUESTS workloads, CPU and memory, with their counts), then reductions of requests and limits, and node changes last, after the pods are resized (minimum_nodes_after).`;
-
-const HOST_PROMPT = `Provide a markdown report for the following use case:
-## Optimize host sizing
-If a user wants to optimize the size of their hosts, they generally have three goals:
-1. Shutdown potentially unused hosts
-2. Reduce over-provisioned hosts to save on cost
-3. Increase the size of under-provisioned hosts to reduce risk
-
-Be sure to provide an overview (total_hosts and the number of hosts per utilization) and any insights from the data provided. cpu_p90_percent and mem_p90_percent are percentages of the host's CPU and memory.
-Each group gives the range of its hosts (cpu_p90_min_percent to cpu_p90_max_percent, and the same for memory): describe a group only by its range - never by its examples, and never say what most hosts do - and each group on its own: never merge two groups, their counts or their ranges.
-Hosts in a KUBERNETES_NODE group are Kubernetes nodes, one group per cluster (k8s_cluster); a node's host CPU covers everything on the host over 30 days, while the cluster figures are container requests over 7 days, so do not judge cluster capacity from it.
-For KUBERNETES_NODE hosts: give only the group's range and a pointer to the Kubernetes report's cluster section - no resizing, removing or adding, and no risk, pressure or capacity statements (the host data covers 30 days and includes nodes since replaced).
-NOT_REPORTING hosts sent no data in the last 24 hours - replaced Kubernetes nodes or stopped machines: give their count only, as gone, with no resizing, no risk statement and no host names.
-Change for each group (use these, not your own): UNUSED - candidates to shut down; OVERPROVISIONED - move to smaller instances (not shutting down); UNDERPROVISIONED - move to larger instances; NOMINAL - keep. No money amounts.`;
-
-const DISK_PROMPT = `Provide a markdown report for:
-## Optimize disk usage
-If disk utilization is not optimized, it can result in either wasted spend or worse preventable outages. If the user asked for disk optimization, you should provide two things:
-1. Disks that are overutilized and likely to fill
-2. Disks that are underutilized and will likely never fill, which can safely be shrunken
-Note: disks that are less than 50GiB are not relevant, and only hosts that sent data in the last 24 hours are in the data.
-For over-utilized disks, disk_size_gib is the disk's size, used_gib its average use, and never_used_gib the free space it never dipped below in 30 days.
-Under-utilized disks come grouped by mount point and size: each group gives how many disks it holds (disks), some of their hosts, the 30-day peak use (max_used_gib, max_disk_percent), the size to shrink each disk to (recommended_size_gib: the peak plus 30%) and the space the whole group frees (reclaimable_gib). disk_count, group_count and total_reclaimable_gib are the totals. Describe each group only by its own numbers - never generalize one group's size to all disks - and write that a disk is shrunk TO recommended_size_gib, freeing reclaimable_gib. For database data volumes, add that expected data growth should be checked before shrinking.`;
-
-/** The key-actions summary: read only the finished reports, so it repeats no number they lack. */
+/**
+ * The key actions on top of the notebook and the email. The AI reads no raw data and no reports: the
+ * rank_actions script hands it the candidates, risks first, each with its item and numbers, and it
+ * picks and words a few. The numbers it writes are still checked against the data (checkNumbers), and
+ * without its answer the scripts show the first candidates as they are.
+ */
 const ANY_SCOPE = INFRA_DOMAINS.map(inScope).join(" or ");
-const reportText = (domain: InfraDomain) => `{{ result("${DOMAINS[domain].prompt}")["text"] | default("NOT_RUN") }}`;
-const SUMMARY_DATA = INFRA_DOMAINS.map((domain) => `## ${DOMAINS[domain].title.English} report\n${reportText(domain)}`).join("\n\n");
-const SUMMARY_PROMPT = `Below are infrastructure optimization reports, one per domain (a report given as NOT_RUN was out of scope or failed - skip it).
-Write the key actions across all of them: 3 to 5 bullet points, the highest risk or the largest saving first. Each bullet names the affected cluster, workload, host or disk and the concrete change, with the number from the report that justifies it.
-Then one line with the resources the reports say can be freed (nodes, GiB), copying the totals the reports state (such as the total reclaimable GiB) - never a sum of the bullets above, and no money amounts or saving percentages.`;
+const SUMMARY_DATA = `{{ result("${RANK_TASK}")["candidates"] | default("") }}`;
+const SUMMARY_PROMPT = `Below are candidate actions from an infrastructure optimization run, already ranked: risks first, then savings. Each starts with its domain in brackets and gives the item, what was measured and the change, with its numbers.
+Write the key actions: 3 to 5 bullet points chosen from the candidates, keeping their order and covering different domains where the list allows. Each bullet restates one candidate in one plain sentence: the item (with its cluster in parentheses where the candidate gives one), the change, and the candidate's numbers exactly as written.`;
 const SUMMARY_INSTRUCTION = [
-  "Start directly with the first bullet - no title, no introduction. Use only facts and numbers that appear in the reports; do not add new findings, and do not repeat a recommendation a report itself marks as not advisable.",
-  "Copy every number exactly as the report states it and keep it with the item it belongs to - never move a value from one workload, cluster or disk to another, never add numbers up yourself, and add no percentage or amount the report does not give.",
-  "Name a workload's cluster only as the report gives it next to that workload (name (cluster)) - never take a cluster from another sentence.",
-  "Throttling has no unit - never write mcores or any other unit for it - and it comes from CPU limits, never from the requests: never give low requests as its cause.",
-  "For node counts, write only the CPU and memory node counts and the minimum as the Kubernetes report gives them - never call a resource binding or limiting. Adding or removing Kubernetes nodes comes only from the Kubernetes report's cluster section: never turn what the host report says about Kubernetes nodes into a cluster action.",
+  "Start directly with the first bullet - no title, no introduction and no closing line.",
+  "Use only the candidates: no other facts, causes or advice, no number of your own, never add numbers up, and never move a number from one item to another. Keep each value with its unit as written; the throttling indicator has no unit.",
+  "Keep the candidate's own words for what a finding means. Never write money amounts, prices or saving percentages.",
+  "A candidate that counts workloads across all clusters names no cluster: never give it one, and call them workloads, not pods.",
 ].join("\n");
 
-const NETWORK_PROMPT = `Provide a markdown report for:
-## Identify saturated interfaces
-Saturated interfaces could cause network slowdowns and require either upgrades or rerouting traffic.
-
-## Identify up/down interfaces
-Network admininstrators refer to interfaces as "up/down", when the administrative status is "up" but the operational status is "down". Sometimes this is normal, e.g. a port for a user's computer is down; however, many times this can also mean that a port that is intended to be up is for some reason down, perhaps due to a cable or NIC issue.`;
-
 /**
- * The part the notebook and the email share: the run's input, the time, and each in-scope domain's
- * report read back from its prompt task (empty when the task was skipped or failed). Both deliveries
- * then name the same domains in their title or subject.
+ * The part the notebook, the email and rank_actions share: the run's input, the time, each in-scope
+ * domain's query results, the report written from them (REPORT_WRITER) and their data tables. Both
+ * deliveries then name the same domains in their title or subject.
  */
 const collectReports = () => {
   const domains = INFRA_DOMAINS.map((domain) => ({
     domain,
-    task: DOMAINS[domain].prompt,
     title: DOMAINS[domain].title,
     short: DOMAINS[domain].short,
     period: DOMAINS[domain].period,
-    queries: DOMAINS[domain].queries.map((name) => ({ name, title: QUERY_TITLES[name], query: INFRA_QUERIES[name], table: TABLES[name] })),
+    queries: DOMAINS[domain].queries.map((name) => ({ name, title: QUERY_TITLES[name], query: INFRA_QUERIES[name], table: { ...TABLES[name], meaningKind: MEANING_KINDS[name] ?? null, note: TABLE_NOTES[name] } })),
   }));
   return `const DOMAINS = ${JSON.stringify(domains, null, 2)};
 const FINDINGS = ${JSON.stringify(FINDINGS)};
@@ -630,6 +509,7 @@ const renderData = (spec, records, language, text) => {
   if (!Array.isArray(records)) return "_" + text.noData + "_";
   const first = records[0] ?? {};
   const parts = [];
+  if (spec.note) parts.push("_" + spec.note[language] + "_");
   if (spec.totals) parts.push(spec.totals.map((item) => "**" + item.label[language] + ":** " + cell(first[item.field], false, text)).join(" · "));
   if (spec.layout === "rows") {
     const rows = spec.nested ? (Array.isArray(first[spec.nested]) ? first[spec.nested] : []) : records;
@@ -644,19 +524,21 @@ const renderData = (spec, records, language, text) => {
   const countOnly = [];
   for (const group of groups) {
     const label = findingLabel(group[spec.findingField], language) + (spec.labelField && group[spec.labelField] ? " - " + cell(group[spec.labelField], false, text) : "");
-    const ranges = (spec.ranges ?? []).map((range) => range.label[language] + ": " + cell(group[range.min], false, text) + "~" + cell(group[range.max], false, text)).join(" · ");
+    const ranges = (spec.ranges ?? []).map((range) => range.label[language] + ": " + (cell(group[range.min], false, text) === cell(group[range.max], false, text) ? cell(group[range.min], false, text) : cell(group[range.min], false, text) + "~" + cell(group[range.max], false, text))).join(" · ");
     const count = group[spec.countField];
     const examples = Array.isArray(group.examples) ? group.examples : [];
+    // What the finding means and what to change - fixed sentences (infraReportText.ts), not the AI's.
+    const meaning = spec.meaningKind ? MEANINGS[spec.meaningKind + " " + group[spec.findingField]] ?? MEANINGS["workload " + group[spec.findingField]] : null;
     if (examples.length === 0) {
       const names = spec.namesField && Array.isArray(group[spec.namesField]) && group[spec.namesField].length > 0 ? " - " + text.forExample + " " + cell(group[spec.namesField], false, text) : "";
-      countOnly.push("- " + label + ": " + cell(count, false, text) + text.count + (ranges ? " (" + ranges + ")" : "") + names);
+      countOnly.push("- " + label + ": " + cell(count, false, text) + text.count + (ranges ? " (" + ranges + ")" : "") + names + (meaning ? " - " + meaning[language] : ""));
       continue;
     }
     const tables = spec.vertical
       ? examples.map((row) => "**" + cell(row[spec.vertical], false, text) + "**" + NL + NL + verticalTable(spec.columns, row, language, text)).join(NL + NL)
       : table(spec.columns, examples, language, text);
     const sample = Number(count) > examples.length ? NL + NL + "_" + text.sample(examples.length, cell(count, false, text)) + "_" : "";
-    parts.push("**" + label + " · " + cell(count, false, text) + text.count + "**" + (ranges ? NL + NL + ranges : "") + NL + NL + tables + sample);
+    parts.push("**" + label + " · " + cell(count, false, text) + text.count + "**" + (meaning ? NL + NL + meaning[language] : "") + (ranges ? NL + NL + ranges : "") + NL + NL + tables + sample);
   }
   if (groups.length === 0) parts.push("_" + text.none + "_");
   if (countOnly.length > 0) parts.push(countOnly.join(NL));
@@ -943,6 +825,7 @@ const checkData = (byName) => {
   return issues;
 };
 
+${REPORT_WRITER}
 const TEXT = {
   Korean: {
     name: "[인프라 최적화] ",
@@ -958,9 +841,9 @@ const TEXT = {
     missing: "_이 영역의 리포트가 생성되지 않았습니다._",
     missingList: "리포트를 받지 못한 영역",
     data: "원본 데이터 쿼리",
-    footer: "Ops Navigator의 Infrastructure Optimization 워크플로가 생성했습니다. 설명은 Dynatrace 생성형 AI가 작성했고, 데이터 표는 쿼리 결과를 그대로 옮겼습니다. 아래 쿼리로 원본 데이터를 다시 확인할 수 있습니다.",
-    mailFooter: "Ops Navigator의 Infrastructure Optimization 워크플로가 보낸 메일입니다. 설명은 Dynatrace 생성형 AI가 작성했고, 데이터 표는 쿼리 결과를 그대로 옮겼습니다. 쿼리는 결과 전달에 노트북을 함께 선택하거나, Workflows 앱의 실행 기록에서 확인할 수 있습니다.",
-    mailFooterLinked: "Ops Navigator의 Infrastructure Optimization 워크플로가 보낸 메일입니다. 설명은 Dynatrace 생성형 AI가 작성했고, 데이터 표는 쿼리 결과를 그대로 옮겼습니다. 쿼리는 위 노트북에서 확인할 수 있습니다.",
+    footer: "Ops Navigator의 Infrastructure Optimization 워크플로가 생성했습니다. 리포트와 데이터 표는 쿼리 결과로 만들었고, 핵심 요약만 Dynatrace 생성형 AI가 골라 썼습니다. 아래 쿼리로 원본 데이터를 다시 확인할 수 있습니다.",
+    mailFooter: "Ops Navigator의 Infrastructure Optimization 워크플로가 보낸 메일입니다. 리포트와 데이터 표는 쿼리 결과로 만들었고, 핵심 요약만 Dynatrace 생성형 AI가 골라 썼습니다. 쿼리는 결과 전달에 노트북을 함께 선택하거나, Workflows 앱의 실행 기록에서 확인할 수 있습니다.",
+    mailFooterLinked: "Ops Navigator의 Infrastructure Optimization 워크플로가 보낸 메일입니다. 리포트와 데이터 표는 쿼리 결과로 만들었고, 핵심 요약만 Dynatrace 생성형 AI가 골라 썼습니다. 쿼리는 위 노트북에서 확인할 수 있습니다.",
     notebook: "노트북",
     notebookLink: "원본 데이터 쿼리와 함께 보기",
     summary: "## 핵심 요약",
@@ -976,9 +859,10 @@ const TEXT = {
     more: (rest) => "외 " + rest + "개는 생략했습니다.",
     sample: (shown, total) => "전체 " + total + "개 중 " + shown + "개 예시입니다.",
     forExample: "예:",
-    unverified: "데이터에서 찾지 못한 수치입니다. AI가 계산하거나 추정한 값일 수 있으니 아래 표의 값으로 확인하세요: ",
+    unverified: "데이터에서 찾지 못한 수치입니다. AI가 계산하거나 추정한 값일 수 있으니 리포트의 표 값으로 확인하세요: ",
     dataCheck: "데이터 점검:",
     dataCheckNote: "쿼리 결과끼리 맞지 않는 값이 있습니다. 쿼리 오류일 수 있으니 해당 항목은 조치 전에 원본 데이터로 확인하세요.",
+    summaryFallback: "AI 요약을 받지 못해 우선순위가 높은 후보를 그대로 보여 줍니다.",
   },
   English: {
     name: "[Infra Optimization] ",
@@ -994,9 +878,9 @@ const TEXT = {
     missing: "_No report was produced for this domain._",
     missingList: "No report for",
     data: "Raw data queries",
-    footer: "Created by the Infrastructure Optimization workflow of Ops Navigator. The text is written by Dynatrace generative AI; the data tables are the query results as they came. The queries below show the data again.",
-    mailFooter: "Sent by the Infrastructure Optimization workflow of Ops Navigator. The text is written by Dynatrace generative AI; the data tables are the query results as they came. For the queries, also choose notebook delivery, or open the run in the Workflows app.",
-    mailFooterLinked: "Sent by the Infrastructure Optimization workflow of Ops Navigator. The text is written by Dynatrace generative AI; the data tables are the query results as they came. The queries are in the notebook above.",
+    footer: "Created by the Infrastructure Optimization workflow of Ops Navigator. The reports and data tables come from the query results; only the key actions are picked and worded by Dynatrace generative AI. The queries below show the data again.",
+    mailFooter: "Sent by the Infrastructure Optimization workflow of Ops Navigator. The reports and data tables come from the query results; only the key actions are picked and worded by Dynatrace generative AI. For the queries, also choose notebook delivery, or open the run in the Workflows app.",
+    mailFooterLinked: "Sent by the Infrastructure Optimization workflow of Ops Navigator. The reports and data tables come from the query results; only the key actions are picked and worded by Dynatrace generative AI. The queries are in the notebook above.",
     notebook: "Notebook",
     notebookLink: "open with the raw data queries",
     summary: "## Key actions",
@@ -1015,6 +899,7 @@ const TEXT = {
     unverified: "Numbers not found in the data - the AI may have computed or estimated them, so check them against the tables: ",
     dataCheck: "Data check:",
     dataCheckNote: "some query results contradict each other. That can be a query error, so check these items against the raw data before acting on them.",
+    summaryFallback: "No AI summary came back, so these are the top-ranked candidates as they are.",
   },
 };
 
@@ -1029,49 +914,50 @@ const ASSIST_PROMO = /^.*(enable Agentic AI|Agentic AI(를|을)? 활성화).*$/g
 // rule left dangling at the end; all go.
 const tidy = (report) => report.replace(LANGUAGE_NOTE, "").replace(ASSIST_PROMO, "").replace(/\\n{3,}/g, "\\n\\n").replace(/^(#{1,6} [^\\n]*)\\n+---[ \\t]*\\n+/m, "$1\\n\\n").replace(/\\n+---[ \\t]*\\s*$/, "").trim();
 
-async function collect(execution_id) {
+// The run's input and every in-scope query's records (null: failed, or did not run) - for collect()
+// and for rank_actions.
+async function gather(execution_id) {
   const execution = await executionsClient.getExecution({ id: execution_id });
   const input = execution.input ?? {};
   const language = input.language === "English" ? "English" : "Korean";
-  const text = TEXT[language];
   const scope = input.scope ?? {};
+  const covered = DOMAINS.filter((entry) => scope[entry.domain] === true);
+  const byName = {};
+  for (const entry of covered) {
+    for (const item of entry.queries) {
+      try {
+        const task = await executionsClient.getTaskExecution({ executionId: execution_id, id: item.name });
+        byName[item.name] = Array.isArray(task.result?.records) ? task.result.records : null;
+      } catch (error) {
+        byName[item.name] = null;
+      }
+    }
+  }
+  return { language, scope, covered, byName };
+}
+
+async function collect(execution_id) {
+  const { language, scope, covered, byName } = await gather(execution_id);
+  const text = TEXT[language];
   // Korea time, written out by hand: the runtime's Intl time zones are not guaranteed.
   const stamp = new Date(Date.now() + 9 * 3600 * 1000).toISOString().slice(0, 16).replace("T", " ") + " KST";
 
-  const covered = DOMAINS.filter((entry) => scope[entry.domain] === true);
   const reports = [];
-  // Every number of every query, for checking the summary, which spans the domains.
+  // Every number of every query, for checking the AI's key actions, which span the domains.
   const allKnown = newKnown();
   for (const entry of covered) {
-    let report = "";
-    try {
-      const task = await executionsClient.getTaskExecution({ executionId: execution_id, id: entry.task });
-      report = tidy(String(task.result?.text ?? ""));
-    } catch (error) {
-      report = "";
-    }
-    // The data tables, drawn here from each query task's records - never copied by the AI.
-    const data = [];
-    const known = newKnown();
-    const byName = {};
-    for (const item of entry.queries) {
-      let records = null;
-      try {
-        const task = await executionsClient.getTaskExecution({ executionId: execution_id, id: item.name });
-        records = Array.isArray(task.result?.records) ? task.result.records : null;
-      } catch (error) {
-        records = null;
-      }
-      byName[item.name] = records;
-      collectNumbers(records, known);
-      collectNumbers(records, allKnown);
-      data.push("#### " + item.title[language] + NL + NL + renderData(item.table, records, language, text));
-    }
+    const own = Object.fromEntries(entry.queries.map((item) => [item.name, byName[item.name] ?? null]));
+    // The data tables, drawn from each query task's records.
+    const data = entry.queries.map((item) => {
+      collectNumbers(own[item.name], allKnown);
+      return "#### " + item.title[language] + NL + NL + renderData(item.table, own[item.name], language, text);
+    });
     // Contradictions between the query results go above the tables, so no one acts on them unseen.
-    const issues = checkData(byName);
+    const issues = checkData(own);
     if (issues.length > 0) data.unshift("> ⚠ **" + text.dataCheck + "** " + text.dataCheckNote + NL + issues.slice(0, 20).map((issue) => "> - " + issue).join(NL) + (issues.length > 20 ? NL + "> - " + text.more(issues.length - 20) : ""));
-    const checked = report ? checkNumbers(report, known, text) : { text: "", flagged: [] };
-    reports.push({ entry, report: checked.text, flagged: checked.flagged, issues, data: "### " + entry.title[language] + " - " + text.tables + NL + NL + data.join(NL + NL) });
+    // A domain whose every query failed has no report, only its note in the tables.
+    const report = entry.queries.some((item) => Array.isArray(own[item.name])) ? writeReport(entry, own, language) : "";
+    reports.push({ entry, report, issues, data: "### " + entry.title[language] + " - " + text.tables + NL + NL + data.join(NL + NL) });
   }
 
   // Titles and subjects name the domains that produced a report ("All" for all four): a list of
@@ -1084,15 +970,23 @@ async function collect(execution_id) {
   // How far back each domain looks: the reports do not say, and a reader cannot tell minutes from days.
   const periodLine = covered.map((entry) => entry.short[language] + " " + entry.period[language]).join(" · ");
 
-  // The key actions across the reports (SUMMARY_TASK), shown on top; none when it did not run.
+  // The key actions on top: the AI's pick of the ranked candidates (SUMMARY_TASK), numbers checked;
+  // without it, the first candidates as they are. Then the resources line, from the data.
   let summary = "";
   try {
     const task = await executionsClient.getTaskExecution({ executionId: execution_id, id: "${SUMMARY_TASK}" });
-    summary = tidy(String(task.result?.text ?? ""));
+    // "•" bullets (diw85600 test run) become a markdown list.
+    summary = tidy(String(task.result?.text ?? "")).replace(/^[•●▪] */gm, "- ");
     if (summary) summary = checkNumbers(summary, allKnown, text).text;
   } catch (error) {
     summary = "";
   }
+  if (!summary) {
+    const candidates = spreadPick(rankActions(byName, language, scope), 5);
+    summary = candidates.length > 0 ? candidates.map((line) => "- " + line).join(NL) + NL + NL + "_" + text.summaryFallback + "_" : "";
+  }
+  const resources = resourcesLine(byName, language, scope);
+  if (resources) summary = (summary ? summary + NL + NL : "") + resources;
 
   // Which tenant ran this: one person can get these mails from several. The tenant id is the URL's
   // first host label (https://diw85600.apps.dynatrace.com -> diw85600).
@@ -1191,6 +1085,21 @@ export default async function ({ execution_id }) {
 `;
 
 /**
+ * The key-action candidates for the AI (RANK_TASK): the same query results and the same ranking the
+ * notebook falls back to, as numbered lines in the run's language.
+ */
+const rankScript = () => `// ${MARKER}
+import { executionsClient } from "@dynatrace-sdk/client-automation";
+
+${collectReports()}
+export default async function ({ execution_id }) {
+  const { language, scope, byName } = await gather(execution_id);
+  const candidates = rankActions(byName, language, scope);
+  return { count: candidates.length, candidates: candidates.map((line, index) => String(index + 1) + ". " + line).join(NL) };
+}
+`;
+
+/**
  * Moves this template's older versions to the Workflows trash. Only workflows whose notebook task
  * carries the marker with a lower version: Dynatrace's own template and same-version copies made on
  * purpose stay. Runs as the workflow's actor - the app itself may not delete workflows. Never throws:
@@ -1254,37 +1163,39 @@ const taskDefinitions = (): Record<string, TaskDefinition> => ({
     action: "dynatrace.automations:run-javascript",
     description: "Moves older versions of this workflow made by Ops Navigator to the trash",
     input: { script: cleanupScript() },
-    // Right of the Kubernetes queries: two tasks on one spot make the workflow invalid to save.
-    position: { x: 4, y: 1 },
+    // Right of the queries: two tasks on one spot make the workflow invalid to save.
+    position: { x: 6, y: 1 },
     predecessors: [],
     conditions: { states: {} },
   },
-  // Kubernetes - the five queries run side by side.
-  k8s_cluster_cpu: query("k8s_cluster_cpu", "kubernetes", { x: -2, y: 1 }),
-  k8s_cluster_memory: query("k8s_cluster_memory", "kubernetes", { x: -1, y: 1 }),
-  k8s_workload_cpu: query("k8s_workload_cpu", "kubernetes", { x: 1, y: 1 }),
-  k8s_workload_memory: query("k8s_workload_memory", "kubernetes", { x: 2, y: 1 }),
-  k8s_rightsizing: query("k8s_rightsizing", "kubernetes", { x: 3, y: 1 }),
-  k8s_report_prompt: prompt("kubernetes", { x: 0, y: 2 }, K8S_PROMPT, K8S_INSTRUCTION, K8S_DATA),
-  // The domains run one after another, as in the template, so the AI calls do not all land at once:
-  // each waits for the report before it (ANY - a skipped or failed one does not hold the next back).
-  host_utilization: query("host_utilization", "host", { x: -1, y: 3 }, "k8s_report_prompt"),
-  host_report_prompt: prompt("host", { x: 0, y: 4 }, HOST_PROMPT, "",`Use this analysis of p90 CPU and Memory for the past 30 days:\n${records("host_utilization")}`),
-  disk_overutilized: query("disk_overutilized", "disk", { x: -1, y: 5 }, "host_report_prompt"),
-  disk_underutilized: query("disk_underutilized", "disk", { x: 0, y: 5 }, "host_report_prompt"),
-  disk_report_prompt: prompt("disk", { x: 0, y: 6 }, DISK_PROMPT, "", `{\n  "Overutilized disks": ${records("disk_overutilized")},\n  "Underutilized disks": ${records("disk_underutilized")}\n}`),
-  network_updown_interfaces: query("network_updown_interfaces", "network", { x: -1, y: 7 }, "disk_report_prompt"),
-  network_saturated_interfaces: query("network_saturated_interfaces", "network", { x: 0, y: 7 }, "disk_report_prompt"),
-  network_report_prompt: prompt("network", { x: 0, y: 8 }, NETWORK_PROMPT, "", `{\n  "Saturated interfaces": ${records("network_saturated_interfaces")},\n  "Up/Down interfaces": ${records("network_updown_interfaces")}\n}`),
-  // The key actions across every report, for the top of the notebook and the email (ANY - it sums up
-  // whatever reports did come out).
+  // The queries, side by side.
+  k8s_cluster_cpu: query("k8s_cluster_cpu", "kubernetes", { x: -4, y: 1 }),
+  k8s_cluster_memory: query("k8s_cluster_memory", "kubernetes", { x: -3, y: 1 }),
+  k8s_workload_cpu: query("k8s_workload_cpu", "kubernetes", { x: -2, y: 1 }),
+  k8s_workload_memory: query("k8s_workload_memory", "kubernetes", { x: -1, y: 1 }),
+  k8s_rightsizing: query("k8s_rightsizing", "kubernetes", { x: 0, y: 1 }),
+  host_utilization: query("host_utilization", "host", { x: 1, y: 1 }),
+  disk_overutilized: query("disk_overutilized", "disk", { x: 2, y: 1 }),
+  disk_underutilized: query("disk_underutilized", "disk", { x: 3, y: 1 }),
+  network_updown_interfaces: query("network_updown_interfaces", "network", { x: 4, y: 1 }),
+  network_saturated_interfaces: query("network_saturated_interfaces", "network", { x: 5, y: 1 }),
+  // The key-action candidates from whatever queries came back (ANY - a failed one is left out).
+  [RANK_TASK]: {
+    action: "dynatrace.automations:run-javascript",
+    description: "Ranks the key-action candidates across the domains from the query results",
+    input: { script: rankScript() },
+    position: { x: 0, y: 2 },
+    predecessors: INFRA_DOMAINS.flatMap((domain) => DOMAINS[domain].queries),
+    conditions: { states: Object.fromEntries(INFRA_DOMAINS.flatMap((domain) => DOMAINS[domain].queries).map((name) => [name, "ANY"])), custom: `{{ ${ANY_SCOPE} }}`, else: "SKIP" },
+  },
+  // The AI picks the key actions from them; no candidates, no call.
   [SUMMARY_TASK]: {
     action: "dynatrace.davis.workflow.actions:prompt-generative-ai",
-    description: "Sums up the key actions across all reports with Dynatrace generative AI",
+    description: "Picks and words the key actions from the ranked candidates with Dynatrace generative AI",
     input: promptInput(SUMMARY_PROMPT, withLanguage(SUMMARY_INSTRUCTION), SUMMARY_DATA),
-    position: { x: 0, y: 9 },
-    predecessors: ["network_report_prompt"],
-    conditions: { states: { network_report_prompt: "ANY" }, custom: `{{ ${ANY_SCOPE} }}`, else: "SKIP" },
+    position: { x: 0, y: 3 },
+    predecessors: [RANK_TASK],
+    conditions: { states: { [RANK_TASK]: "OK" }, custom: `{{ result("${RANK_TASK}")["count"] > 0 }}`, else: "SKIP" },
     retry: PROMPT_RETRY,
   },
   // Delivery: one notebook and/or one email with every report (ANY - the reports that did come out go
@@ -1293,7 +1204,7 @@ const taskDefinitions = (): Record<string, TaskDefinition> => ({
     action: "dynatrace.automations:run-javascript",
     description: "Saves every report of the run, with its queries, as one notebook (delivery: notebook or both)",
     input: { script: notebookScript() },
-    position: { x: 0, y: 10 },
+    position: { x: 0, y: 4 },
     predecessors: [SUMMARY_TASK],
     conditions: { states: { [SUMMARY_TASK]: "ANY" }, custom: `{{ ${BY_NOTEBOOK} }}`, else: "SKIP" },
   },
@@ -1301,7 +1212,7 @@ const taskDefinitions = (): Record<string, TaskDefinition> => ({
     action: "dynatrace.automations:run-javascript",
     description: "Puts every report of the run into one email body, linking the notebook when there is one (delivery: email or both)",
     input: { script: composeEmailScript() },
-    position: { x: 0, y: 11 },
+    position: { x: 0, y: 5 },
     predecessors: [NOTEBOOK_TASK],
     // ANY: a skipped notebook (email only) or a failed one still lets the email go out.
     conditions: { states: { [NOTEBOOK_TASK]: "ANY" }, custom: `{{ ${BY_EMAIL} }}`, else: "SKIP" },
@@ -1316,7 +1227,7 @@ const taskDefinitions = (): Record<string, TaskDefinition> => ({
       subject: `{{ result("${COMPOSE_EMAIL_TASK}")["subject"] }}`,
       content: `{{ result("${COMPOSE_EMAIL_TASK}")["body"] }}`,
     },
-    position: { x: 0, y: 12 },
+    position: { x: 0, y: 6 },
     predecessors: [COMPOSE_EMAIL_TASK],
     conditions: { states: { [COMPOSE_EMAIL_TASK]: "OK" }, custom: `{{ ${BY_EMAIL} }}`, else: "SKIP" },
   },
