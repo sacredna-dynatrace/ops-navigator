@@ -29,13 +29,17 @@ timeseries {
 // The size to shrink to: the 30-day peak use plus 30%, rounded up to 10 GiB, and never under 20 GiB;
 // the rest can be reclaimed.
 | fieldsAdd recommended_size_gib = arrayMax(array(ceil(max_used_gib * 1.3 / 10) * 10, 20))
-| fieldsAdd reclaimable_gib = round(disk_size_gib - recommended_size_gib, decimals: 1)
 // One row per mount point and size, so the report sees how the disks really split up.
 | summarize by:{ mount = dt.entity.disk.name, disk_size_gib = round(disk_size_gib) }, {
     disks = count(), hosts = collectDistinct(dt.entity.host.name, maxLength: 3),
     max_used_gib = max(max_used_gib), max_disk_percent = max(max_disk_percent),
-    recommended_size_gib = max(recommended_size_gib), reclaimable_gib = round(sum(reclaimable_gib), decimals: 1)
+    recommended_size_gib = max(recommended_size_gib), size_sum_gib = sum(disk_size_gib)
   }
+// The row gives one size for all its disks - the largest any of them needs - so what it reclaims is
+// what that size leaves. Summing each disk's own reclaimable gave rad60188's /mongo_data 320,080 GiB
+// next to "6,000 GiB x 5 disks", which leaves 319,990.
+| fieldsAdd reclaimable_gib = round(size_sum_gib - recommended_size_gib * disks, decimals: 1)
+| fieldsRemove size_sum_gib
 | sort reclaimable_gib desc
 | summarize { disk_count = sum(disks), group_count = count(), total_reclaimable_gib = round(sum(reclaimable_gib), decimals: 1), groups = collectArray(
   record(mount, disk_size_gib, disks, hosts, max_used_gib, max_disk_percent, recommended_size_gib, reclaimable_gib)
