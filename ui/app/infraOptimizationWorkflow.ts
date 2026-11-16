@@ -20,6 +20,10 @@ import { answerLanguageLine } from "./problemAnalysis";
  */
 
 /**
+ * v18: limits and memory INCREASE_LIMITS described as what they are (a limit reserves nothing; the
+ * memory finding means no room above the requests), only the findings the data has, left-out pods
+ * split into no-controller and static with sample names (no assumed Spark), and a fixed change per
+ * host group (OVERPROVISIONED had been told to shut down).
  * v17: each finding's meaning spelled out (CPU findings had been described as eviction risks), the
  * values after rightsizing only from the _after fields, Kubernetes node hosts given a range and a
  * pointer only, and the summary takes node changes from the Kubernetes report alone (it had turned
@@ -60,7 +64,7 @@ import { answerLanguageLine } from "./problemAnalysis";
  * to the trash (CLEANUP_TASK).
  * v2: the notebook's title names the domains it covers, and it gets a description.
  */
-export const INFRA_TEMPLATE_VERSION = 17;
+export const INFRA_TEMPLATE_VERSION = 18;
 export const INFRA_WORKFLOW_TITLE = "[Ops Navigator] Infrastructure Optimization";
 /** Finds every version, v1-v2 titled like Dynatrace's template included; the marker decides. */
 export const INFRA_WORKFLOW_SEARCH = "Infrastructure Optimization";
@@ -160,6 +164,7 @@ type TableSpec = {
   nested?: string;
   vertical?: string;
   labelField?: string;
+  namesField?: string;
   ranges?: { min: string; max: string; label: Record<InfraLanguage, string> }[];
   totals?: { field: string; label: Record<InfraLanguage, string> }[];
   columns: TableColumn[];
@@ -203,7 +208,7 @@ const TABLES: Record<InfraQueryName, TableSpec> = {
     ],
   },
   k8s_workload_cpu: {
-    layout: "byFinding", nested: "findings", findingField: "finding", countField: "count_workloads_with_finding",
+    layout: "byFinding", nested: "findings", findingField: "finding", countField: "count_workloads_with_finding", namesField: "sample_names",
     totals: [total("total_workloads", "전체 워크로드", "Workloads in total"), total("analyzed_workloads", "분석한 워크로드", "Workloads analyzed"), total("excluded_workloads", "제외한 워크로드 (컨트롤러 없는 Pod·정적 Pod)", "Workloads left out (no controller, static pods)")],
     columns: [
       col("k8s.cluster.name", "클러스터", "Cluster"),
@@ -218,7 +223,7 @@ const TABLES: Record<InfraQueryName, TableSpec> = {
     ],
   },
   k8s_workload_memory: {
-    layout: "byFinding", nested: "findings", findingField: "finding", countField: "count_workloads_with_finding",
+    layout: "byFinding", nested: "findings", findingField: "finding", countField: "count_workloads_with_finding", namesField: "sample_names",
     totals: [total("total_workloads", "전체 워크로드", "Workloads in total"), total("analyzed_workloads", "분석한 워크로드", "Workloads analyzed"), total("excluded_workloads", "제외한 워크로드 (컨트롤러 없는 Pod·정적 Pod)", "Workloads left out (no controller, static pods)")],
     columns: [
       col("k8s.cluster.name", "클러스터", "Cluster"),
@@ -330,7 +335,8 @@ const FINDINGS: [string, string, string][] = [
   ["UNUSED", "미사용 추정", "Possibly unused"],
   ["NOMINAL", "정상", "Nominal"],
   ["KUBERNETES_NODE", "Kubernetes 노드 (클러스터 섹션 참고)", "Kubernetes nodes (see the cluster section)"],
-  ["EXCLUDED_NO_CONTROLLER", "제외 (컨트롤러 없는 Pod·정적 Pod)", "Left out (no controller, static pods)"],
+  ["EXCLUDED_NO_CONTROLLER", "제외 (컨트롤러 없는 Pod)", "Left out (no controller)"],
+  ["EXCLUDED_STATIC_POD", "제외 (정적 Pod)", "Left out (static pods)"],
 ];
 
 // ---- Expressions ---------------------------------------------------------------------------------
@@ -379,10 +385,11 @@ const DATA_RULES = [
   "throttling_p95 is a relative indicator: write it as a bare number, never followed by mcores or any other unit.",
   "Never use the word scheduling (스케줄링). For what a finding means, use the meanings the Kubernetes report lists - never your own.",
   "A cluster's finding is its node action, from minimum_nodes: SCALE_DOWN (removable_nodes can go), SCALE_UP (more nodes are needed) or NOMINAL. The memory data has figures only and no finding of its own - never present a memory-only scale-down.",
-  "After pod rightsizing gives each cluster's requests and node counts once every recommended request is applied: say what rightsizing does to the nodes only with the _after fields (nodes_needed_after_for_cpu, nodes_needed_after_for_memory, minimum_nodes_after, removable_nodes_after) - never repeat today's node counts as values after rightsizing - and never guess whether the requests rise or fall. analyzed_cpu_requests_percent and analyzed_mem_requests_percent show, per cluster, how much of the requests the advice covers; only for a cluster where a share is under 50%, say that most of those requests belong to the pods left out (for example Spark executors), so sizing them is the larger lever.",
+  "After pod rightsizing gives each cluster's requests and node counts once every recommended request is applied: say what rightsizing does to the nodes only with the _after fields (nodes_needed_after_for_cpu, nodes_needed_after_for_memory, minimum_nodes_after, removable_nodes_after) - never repeat today's node counts as values after rightsizing - and never guess whether the requests rise or fall. analyzed_cpu_requests_percent and analyzed_mem_requests_percent show, per cluster, how much of the requests the advice covers; only for a cluster where a share is under 50%, say that most of those requests belong to the pods left out - name them from the excluded findings' sample_names - so sizing them is the larger lever.",
   "Throttling concerns CPU only - never mention throttling for memory.",
   "A memory working set within about 1% of its limit can be page cache filling up to the limit: say that raising such a limit may only grow the cache, so check the container's actual need first.",
-  "EXCLUDED_NO_CONTROLLER counts pods without a controller (for example Spark executors or debug pods) and static pods: they are renamed on every run and sized elsewhere. Give their count in one line and no advice for them.",
+  "EXCLUDED_NO_CONTROLLER counts pods without a controller and EXCLUDED_STATIC_POD static pods (the control plane, kube-proxy): they are sized elsewhere. Give each count in one line and no advice, and say what they are only from their sample_names - never assume Spark or any other kind.",
+  "Mention only the findings the data has, under their names as given: never merge findings (no 'OOM and INCREASE_LIMITS'), never add one the data lacks, and never present a finding as included in another.",
   "Never write money amounts, prices, cost figures or saving percentages - not even as estimates or examples, and whatever the instance type. Name savings only as the resources the data gives: removable_nodes, reclaimable_gib, and the recommended requests and limits.",
   "Do not list items whose finding is NOMINAL; give their count only.",
 ].join("\n");
@@ -474,10 +481,11 @@ A cluster's CPU and memory findings must be read together: the node count can go
 # Meaning of each finding (use these words, not your own)
 - CPU INCREASE_REQUESTS or NO_REQUESTS_SET: the workload uses more CPU than it reserves, so on a busy node it gets less CPU than it needs and slows down. CPU never causes eviction.
 - CPU INCREASE_LIMITS: the workload is throttled at its limit.
-- CPU REDUCE_REQUESTS or REDUCE_LIMITS: CPU is reserved but not used, which keeps other pods off the node.
-- Memory OOM_KILLS or INCREASE_LIMITS: the container reaches its memory limit and is killed (OOM).
+- CPU or memory REDUCE_REQUESTS: capacity is reserved but not used, which keeps other pods off the node.
+- CPU or memory REDUCE_LIMITS: the limit is far above use. A limit reserves nothing, but a high one lets the workload take far more than it reserves and crowd the other pods on its node.
+- Memory OOM_KILLS: the container reached its memory limit and was killed (OOM).
+- Memory INCREASE_LIMITS: the limit is at or just above the requests (within 10%), so the workload has no room to grow past its requests before an OOM kill.
 - Memory INCREASE_REQUESTS: the workload uses more memory than it reserves, so under memory pressure it is among the first evicted.
-- Memory REDUCE_REQUESTS or REDUCE_LIMITS: memory is reserved but not used.
 
 # Golden rules
 1. Mention every finding with its count from the data.
@@ -499,7 +507,7 @@ Be sure to provide an overview (total_hosts and the number of hosts per utilizat
 Each group gives the range of its hosts (cpu_p90_min_percent to cpu_p90_max_percent, and the same for memory): describe a group only by its range - never by its examples, and never say what most hosts do.
 Hosts in a KUBERNETES_NODE group are Kubernetes nodes, one group per cluster (k8s_cluster); a node's host CPU covers everything on the host over 30 days, while the cluster figures are container requests over 7 days, so do not judge cluster capacity from it.
 For KUBERNETES_NODE hosts: give only the group's range and a pointer to the Kubernetes report's cluster section - no resizing, removing or adding, and no risk, pressure or capacity statements (the host data covers 30 days and includes nodes since replaced).
-Name the change for each group (smaller or larger instances, shutting down) without any money amount.`;
+Change for each group (use these, not your own): UNUSED - candidates to shut down; OVERPROVISIONED - move to smaller instances (not shutting down); UNDERPROVISIONED - move to larger instances; NOMINAL - keep. No money amounts.`;
 
 const DISK_PROMPT = `Provide a markdown report for:
 ## Optimize disk usage
@@ -616,7 +624,8 @@ const renderData = (spec, records, language, text) => {
     const count = group[spec.countField];
     const examples = Array.isArray(group.examples) ? group.examples : [];
     if (examples.length === 0) {
-      countOnly.push("- " + label + ": " + cell(count, false, text) + text.count + (ranges ? " (" + ranges + ")" : ""));
+      const names = spec.namesField && Array.isArray(group[spec.namesField]) && group[spec.namesField].length > 0 ? " - " + text.forExample + " " + cell(group[spec.namesField], false, text) : "";
+      countOnly.push("- " + label + ": " + cell(count, false, text) + text.count + (ranges ? " (" + ranges + ")" : "") + names);
       continue;
     }
     const tables = spec.vertical
@@ -819,6 +828,7 @@ const TEXT = {
     none: "해당 항목이 없습니다.",
     more: (rest) => "외 " + rest + "개는 생략했습니다.",
     sample: (shown, total) => "전체 " + total + "개 중 " + shown + "개 예시입니다.",
+    forExample: "예:",
     unverified: "데이터에서 찾지 못한 수치입니다. AI가 계산하거나 추정한 값일 수 있으니 아래 표의 값으로 확인하세요: ",
   },
   English: {
@@ -852,6 +862,7 @@ const TEXT = {
     none: "None.",
     more: (rest) => rest + " more not shown.",
     sample: (shown, total) => shown + " examples of " + total + ".",
+    forExample: "for example",
     unverified: "Numbers not found in the data - the AI may have computed or estimated them, so check them against the tables: ",
   },
 };
