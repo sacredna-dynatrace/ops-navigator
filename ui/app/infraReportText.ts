@@ -261,7 +261,8 @@ const writeKubernetes = (byName, language, titles) => {
         if (row.limits_partial === true && !partial[kind].includes(workloadName(row))) partial[kind].push(workloadName(row));
         const used = num(row.p95_working_set_mib);
         const limit = num(row.p95_limits_mib);
-        if (kind === "memory" && row.limits_partial !== true && used !== null && limit !== null && limit > 0 && used >= limit * 0.99 && !atLimit.includes(workloadName(row))) atLimit.push(workloadName(row));
+        // Not with OOM kills: page cache is reclaimed before an OOM kill, so those are real need (rad60188, loki-ingester).
+        if (kind === "memory" && row.limits_partial !== true && !(num(row.sum_oom_kills) > 0) && used !== null && limit !== null && limit > 0 && used >= limit * 0.99 && !atLimit.includes(workloadName(row))) atLimit.push(workloadName(row));
       }
     }
   }

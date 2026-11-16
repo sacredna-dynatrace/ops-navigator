@@ -21,6 +21,8 @@ import { answerLanguageLine } from "./problemAnalysis";
  */
 
 /**
+ * v22: no page-cache note for a workload with OOM kills - page cache is reclaimed before an OOM
+ * kill, so the note read as doubting a real need (rad60188, loki-ingester).
  * v21: container series without a container name (init containers - the Dynatrace operator's
  * install-oneagent) are left out of every Kubernetes query: they hid unset requests and limits and
  * made limits look partly set. The key actions keep the page-cache caveat for a working set at its
@@ -85,7 +87,7 @@ import { answerLanguageLine } from "./problemAnalysis";
  * to the trash (CLEANUP_TASK).
  * v2: the notebook's title names the domains it covers, and it gets a description.
  */
-export const INFRA_TEMPLATE_VERSION = 21;
+export const INFRA_TEMPLATE_VERSION = 22;
 export const INFRA_WORKFLOW_TITLE = "[Ops Navigator] Infrastructure Optimization";
 /** Finds every version, v1-v2 titled like Dynatrace's template included; the marker decides. */
 export const INFRA_WORKFLOW_SEARCH = "Infrastructure Optimization";
