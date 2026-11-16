@@ -1,0 +1,47 @@
+//Host utilization: p90 of CPU and memory over 30 days, in percent. Kubernetes nodes are their own group.
+timeseries { cpu_p90 = percentile(dt.host.cpu.usage, 90, rollup:max, scalar: true), mem_p90 = percentile(dt.host.memory.usage, 90, rollup:max, scalar: true) }, 
+  union: TRUE, by: { dt.entity.host }, from: now()-30d, to: now()
+| fieldsAdd dt.entity.host.name = entityName(dt.entity.host), cpu_p90_percent = round(cpu_p90), mem_p90_percent = round(mem_p90)
+// A host whose name starts with a Kubernetes node's name (k8s-cp1 -> k8s-cp1.hadaruns.internal) is
+// that node: it is sized with its cluster, not on its own.
+| fieldsAdd host_short = lower(splitString(dt.entity.host.name, ".")[0])
+| lookup [
+  timeseries nodes = avg(dt.kubernetes.node.cpu_allocatable), by: { k8s.cluster.name, k8s.node.name }, from: now()-30d
+  | fields node_short = lower(splitString(k8s.node.name, ".")[0]), k8s_cluster = k8s.cluster.name
+  | dedup node_short
+], sourceField: host_short, lookupField: node_short, fields: { k8s_cluster }
+// A host with no data in the last 24 h is gone (a replaced node, a stopped VM): its 30 days describe a
+// machine that no longer runs, so it gets no advice. diw85600 had 6 of its 8 GKE node hosts gone,
+// one at 100% CPU, and a stopped Windows VM told to grow.
+| lookup [
+  timeseries seen = avg(dt.host.cpu.usage), by: { dt.entity.host }, from: now()-24h
+  | fields dt.entity.host, reporting = true
+], sourceField: dt.entity.host, lookupField: dt.entity.host, fields: { reporting }
+| fieldsAdd utilization = coalesce(
+  if(isNull(reporting), "NOT_REPORTING"),
+  if(isNotNull(k8s_cluster), "KUBERNETES_NODE"),
+  if(cpu_p90_percent < 10 and mem_p90_percent < 30, "UNUSED"),
+  if(cpu_p90_percent < 30 and mem_p90_percent < 50, "OVERPROVISIONED"),
+  if(cpu_p90_percent > 80 and mem_p90_percent < 85, "UNDERPROVISIONED"),
+  "NOMINAL"
+)
+// Hosts gone quiet form one group, Kubernetes nodes or not: split by cluster, the report merged the
+// gone GKE nodes with the live ones again ("8 nodes, CPU 39-100%").
+| fieldsAdd k8s_cluster = if(utilization != "NOT_REPORTING", k8s_cluster)
+| sort cpu_p90_percent desc
+// Each group's range: the report had read the five busiest examples as the whole group ("CPU p90 19%"
+// for 21 hosts). Kubernetes nodes come one group per cluster.
+| summarize {count = count(),
+    cpu_p90_min_percent = min(cpu_p90_percent), cpu_p90_max_percent = max(cpu_p90_percent),
+    mem_p90_min_percent = min(mem_p90_percent), mem_p90_max_percent = max(mem_p90_percent),
+    examples = collectArray(
+  record(dt.entity.host.name, dt.entity.host, cpu_p90_percent, mem_p90_percent, k8s_cluster, cloudType = entityAttr(dt.entity.host, "cloudType"), instanceType = coalesce(
+    // EC2: system.model holds the instance type (m5.large) on some hosts and a virtualization label
+    // ("HVM domU") on others - only a dotted value is a type a price can be looked up for.
+    if(entityAttr(dt.entity.host, "cloudType") == "EC2" and contains(entityAttr(dt.entity.host, "additionalSystemInfo")[system.model], "."), entityAttr(dt.entity.host, "additionalSystemInfo")[system.model]),
+    entityAttr(dt.entity.host, "azureVmSizeLabel"),
+    entityAttr(dt.entity.host, "gceMachineType")
+  ))
+, maxLength: 5)}, by: {utilization, k8s_cluster}
+// One record: the host total, then each utilization group.
+| summarize { total_hosts = sum(count), utilization_groups = collectArray(record(utilization, k8s_cluster, count, cpu_p90_min_percent, cpu_p90_max_percent, mem_p90_min_percent, mem_p90_max_percent, examples)) }

@@ -12,7 +12,9 @@
     "update": "dt-app update",
     "info": "dt-app info",
     "help": "dt-app help",
-    "lint": "eslint ."
+    "lint": "eslint .",
+    "test:infra": "node scripts/infra-check.mjs",
+    "gen:infra-queries": "node scripts/gen-infra-queries.mjs"
   },
   "engines": {
     "node": ">=20.19.0"

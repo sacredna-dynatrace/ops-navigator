@@ -1,0 +1,5 @@
+//list of up/down interfaces
+fetch `dt.entity.network:interface`
+|fieldsAdd parentDevice=runs_on[`dt.entity.network:device`], ifAdminStatus, ifOperStatus, type
+|fields network_area=entityAttr(parentDevice,"extCfgGroupLabel",type:"dt.entity.network:device"), parentDeviceName=entityAttr(parentDevice,"entity.name",type:"dt.entity.network:device"), ifAdminStatus, ifOperStatus, type
+|filter ifAdminStatus == "up(1)" and ifOperStatus == "down(2)"

@@ -1,0 +1,97 @@
+{
+ "description": "past cluster, host and disk bugs: node counts that disagree, a misgrouped host, disk sums",
+ "queries": {
+  "k8s_cluster_cpu": [
+   {
+    "finding": "SCALE_DOWN",
+    "examples": [
+     {
+      "k8s.cluster.name": "c1",
+      "finding": "SCALE_DOWN",
+      "avg_node_count": 4,
+      "nodes_needed_for_cpu": 3,
+      "nodes_needed_for_memory": 2,
+      "minimum_nodes": 4,
+      "removable_nodes": 0,
+      "p95_cpu_requests_mcores": 8610
+     }
+    ]
+   }
+  ],
+  "k8s_cluster_memory": [
+   {
+    "k8s.cluster.name": "c1",
+    "nodes_needed_for_memory": 3
+   }
+  ],
+  "k8s_rightsizing": [
+   {
+    "k8s.cluster.name": "c1",
+    "avg_node_count": 4,
+    "analyzed_cpu_requests_percent": 49,
+    "analyzed_mem_requests_percent": 91,
+    "cpu_requests_now_mcores": 8000,
+    "cpu_requests_change_mcores": -2020,
+    "cpu_requests_after_mcores": 5980,
+    "mem_requests_now_gib": 17,
+    "mem_requests_change_gib": -4,
+    "mem_requests_after_gib": 13,
+    "nodes_needed_after_for_cpu": 3,
+    "nodes_needed_after_for_memory": 2,
+    "minimum_nodes_after": 3,
+    "removable_nodes_after": 1
+   }
+  ],
+  "host_utilization": [
+   {
+    "total_hosts": 5,
+    "utilization_groups": [
+     {
+      "utilization": "UNDERPROVISIONED",
+      "k8s_cluster": null,
+      "count": 1,
+      "cpu_p90_min_percent": 90,
+      "cpu_p90_max_percent": 82,
+      "mem_p90_min_percent": 16,
+      "mem_p90_max_percent": 33,
+      "examples": [
+       {
+        "dt.entity.host.name": "vm1",
+        "cpu_p90_percent": 20,
+        "mem_p90_percent": 33
+       }
+      ]
+     }
+    ]
+   }
+  ],
+  "disk_underutilized": [
+   {
+    "disk_count": 3,
+    "group_count": 1,
+    "total_reclaimable_gib": 300,
+    "groups": [
+     {
+      "mount": "/mnt/data",
+      "disk_size_gib": 93,
+      "disks": 3,
+      "max_used_gib": 25,
+      "recommended_size_gib": 20,
+      "reclaimable_gib": 218.7
+     }
+    ]
+   }
+  ]
+ },
+ "expect": [
+  "c1: minimum_nodes is not the larger",
+  "c1: finding SCALE_DOWN where the node counts say NOMINAL",
+  "c1: memory needs 3 nodes here and 2 in the CPU query",
+  "c1: CPU requests now differ from the cluster query",
+  "host_utilization · total_hosts: the groups add up to 1, not 5",
+  "UNDERPROVISIONED: a range runs backwards",
+  "vm1: in UNDERPROVISIONED where its values say OVERPROVISIONED",
+  "recommended size under the peak use",
+  "total_reclaimable_gib"
+ ]
+}

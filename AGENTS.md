@@ -167,7 +167,10 @@ actions/
   build-analysis-prompt.action.ts  # Workflow action: builds the Analyze-problem prompt for a Davis problem
 ui/app/analyzeWorkflow.ts          # Analyze Problem workflows (SRE agent): template, create intent, run event, result
 ui/app/infraOptimizationWorkflow.ts # Infrastructure Optimization Agent template (no SDK imports): email/notebook delivery, Korean/English
-ui/app/infraOptimizationQueries.ts  # Its DQL as generated JSON strings (the queries hold backticks)
+ui/app/infraOptimizationQueries.ts  # Its DQL as generated JSON strings - do not edit; generated from infra-queries/*.dql
+infra-queries/*.dql                 # The infra template's queries, one file each (npm run gen:infra-queries)
+scripts/infra-check.mjs             # npm run test:infra - checks the infra template on saved and live query results
+infra-tests/                        # Synthetic sets and number-check cases (committed); fixtures/ holds tenant results (ignored)
 ui/app/automationWorkflows.ts       # Automation page: create intent, finding workflows this app made
 ```
 
@@ -259,3 +262,9 @@ edges, because the busiest services and the busiest hosts are different entities
 - Edits here hit large files with template literals and single-line JSX. Shell heredocs mangle
   backticks, and a short anchor like `  return {` matches the wrong occurrence. Use a Node script
   with a quoted heredoc, pick a unique anchor, and grep to confirm the edit landed.
+- **Infra Optimization template:** edit the queries in `infra-queries/*.dql`, then
+  `npm run gen:infra-queries`. Before a push, `npm run test:infra -- --live <dtctl context>` on
+  every tenant at hand must pass: it saves each tenant's query results and checks them against each
+  other (`checkData` - the same code the workflow runs), plus the synthetic sets and the number check.
+  A bug found in a report gets a synthetic set or a number-check case, so it cannot come back.
+  Fix a report problem in the query or the data check first; a prompt rule is the last resort.

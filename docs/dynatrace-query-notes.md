@@ -87,6 +87,22 @@ in — a 30 mcore request read as 29.75, a desired container count of 1 read as 
 lets `arrayAvg` skip nulls and return configured values exactly. Use `default: 0` only where a gap
 genuinely means zero.
 
+**`sum()` over nothing but nulls is 0, not null.** Summing per-container requests or limits to a
+workload turned "no container sets a limit" into a limit of 0 - the infra template's NO_LIMIT_SET and
+NO_REQUESTS_SET never fired, and ingress-nginx was told to "increase" a limit it did not have
+(diw85600, 2026-11-16). Count the set values (`countIf(isNotNull(x))`) and keep the sum only when
+that count is above 0; treat a configured 0 as none set.
+
+**A percentile by workload is not the pod's value.** `percentile(container metric, 95, scalar: true)`
+grouped by workload alone runs over every container's samples and returns one container's figure.
+Group by container as well, then sum the containers - and the result is per pod: multiply by the
+replicas (`dt.kubernetes.pods`, p95 of the hourly count) before comparing it with a cluster total. A
+DaemonSet on 4 nodes otherwise counts once - 49% of a cluster's CPU requests read as analyzed for 75%.
+
+**30 days of host data includes hosts that are gone.** Replaced Kubernetes nodes and stopped VMs keep
+their 30-day percentiles. Check for data in the last 24 h (a `lookup` on a 24 h `timeseries`) before
+advising on a host or its disks - diw85600 had 6 of 8 GKE node hosts gone, one at 100% CPU.
+
 **A multi-metric `timeseries { }` block intersects.** An entity missing any one metric drops out of
 the result entirely rather than returning null for it. A pod with no CPU limit disappeared from pod
 utilization until requests/limits were moved into separate `lookup`s. `nonempty: true` is accepted

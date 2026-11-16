@@ -1,0 +1,135 @@
+{
+ "description": "past workload bugs: unset limit read as 0, a reduction upward, totals that do not add up",
+ "queries": {
+  "k8s_workload_memory": [
+   {
+    "total_workloads": 4,
+    "analyzed_workloads": 2,
+    "excluded_workloads": 1,
+    "findings": [
+     {
+      "finding": "INCREASE_LIMITS",
+      "count_workloads_with_finding": 1,
+      "sample_names": null,
+      "examples": [
+       {
+        "k8s.cluster.name": "c1",
+        "k8s.workload.name": "ingress",
+        "pods": 1,
+        "containers": 1,
+        "p95_working_set_mib": 100,
+        "p95_requests_mib": 128,
+        "p95_limits_mib": 0,
+        "sum_oom_kills": 0,
+        "recommended_request_mib": null,
+        "recommended_limit_mib": null,
+        "limits_partial": false
+       }
+      ]
+     },
+     {
+      "finding": "REDUCE_REQUESTS",
+      "count_workloads_with_finding": 1,
+      "sample_names": null,
+      "examples": [
+       {
+        "k8s.cluster.name": "c1",
+        "k8s.workload.name": "db",
+        "pods": 1,
+        "containers": 1,
+        "p95_working_set_mib": 100,
+        "p95_requests_mib": 1536,
+        "p95_limits_mib": 256,
+        "sum_oom_kills": 0,
+        "recommended_request_mib": 1600,
+        "recommended_limit_mib": null,
+        "limits_partial": false
+       }
+      ]
+     },
+     {
+      "finding": "EXCLUDED_NO_CONTROLLER",
+      "count_workloads_with_finding": 1,
+      "sample_names": null,
+      "examples": [
+       {
+        "k8s.cluster.name": "c1",
+        "k8s.workload.name": "spark-exec",
+        "pods": 1,
+        "containers": 1,
+        "p95_working_set_mib": 100,
+        "p95_requests_mib": 128,
+        "p95_limits_mib": 256,
+        "sum_oom_kills": 0,
+        "recommended_request_mib": 64,
+        "recommended_limit_mib": null,
+        "limits_partial": false
+       }
+      ]
+     }
+    ]
+   }
+  ],
+  "k8s_workload_cpu": [
+   {
+    "total_workloads": 2,
+    "analyzed_workloads": 2,
+    "excluded_workloads": 0,
+    "findings": [
+     {
+      "finding": "REDUCE_LIMITS",
+      "count_workloads_with_finding": 1,
+      "sample_names": null,
+      "examples": [
+       {
+        "k8s.cluster.name": "c1",
+        "k8s.workload.name": "springboot-app",
+        "pods": 1,
+        "containers": 1,
+        "p95_cpu_usage_mcores": 100,
+        "p95_cpu_requests_mcores": 100,
+        "p95_cpu_limits_mcores": 100,
+        "throttling_p95": 0,
+        "recommended_request_mcores": null,
+        "recommended_limit_mcores": 120,
+        "limits_partial": false
+       }
+      ]
+     },
+     {
+      "finding": "INCREASE_REQUESTS",
+      "count_workloads_with_finding": 1,
+      "sample_names": null,
+      "examples": [
+       {
+        "k8s.cluster.name": "c1",
+        "k8s.workload.name": "loadgen",
+        "pods": 1,
+        "containers": 1,
+        "p95_cpu_usage_mcores": 1006,
+        "p95_cpu_requests_mcores": 500,
+        "p95_cpu_limits_mcores": 1000,
+        "throttling_p95": 0,
+        "recommended_request_mcores": 1210,
+        "recommended_limit_mcores": null,
+        "limits_partial": false
+       }
+      ]
+     }
+    ]
+   }
+  ]
+ },
+ "expect": [
+  "ingress (c1): a request or limit of 0",
+  "ingress (c1): INCREASE_LIMITS without a higher recommended limit",
+  "db (c1): REDUCE_REQUESTS without a lower recommended request",
+  "spark-exec (c1): advice for a workload left out",
+  "k8s_workload_memory · total_workloads: the findings add up to 3, not 4",
+  "k8s_workload_memory · analyzed_workloads",
+  "springboot-app (c1): REDUCE_LIMITS without a lower recommended limit",
+  "loadgen (c1): the request would end above the limit",
+  "ingress (c1): the request would end above the limit (128 > 0 MiB)",
+  "db (c1): the request would end above the limit (1600 > 256 MiB)"
+ ]
+}

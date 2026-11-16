@@ -1,0 +1,257 @@
+{
+ "description": "consistent results raise nothing (no false alarms)",
+ "queries": {
+  "k8s_workload_cpu": [
+   {
+    "total_workloads": 5,
+    "analyzed_workloads": 4,
+    "excluded_workloads": 1,
+    "findings": [
+     {
+      "finding": "NO_REQUESTS_SET",
+      "count_workloads_with_finding": 1,
+      "sample_names": null,
+      "examples": [
+       {
+        "k8s.cluster.name": "c1",
+        "k8s.workload.name": "a",
+        "pods": 1,
+        "containers": 1,
+        "p95_cpu_usage_mcores": 100,
+        "p95_cpu_requests_mcores": null,
+        "p95_cpu_limits_mcores": null,
+        "throttling_p95": 0,
+        "recommended_request_mcores": 50,
+        "recommended_limit_mcores": null,
+        "limits_partial": false
+       }
+      ]
+     },
+     {
+      "finding": "INCREASE_LIMITS",
+      "count_workloads_with_finding": 1,
+      "sample_names": null,
+      "examples": [
+       {
+        "k8s.cluster.name": "c1",
+        "k8s.workload.name": "b",
+        "pods": 1,
+        "containers": 1,
+        "p95_cpu_usage_mcores": 95,
+        "p95_cpu_requests_mcores": 100,
+        "p95_cpu_limits_mcores": 100,
+        "throttling_p95": 30,
+        "recommended_request_mcores": null,
+        "recommended_limit_mcores": 150,
+        "limits_partial": false
+       }
+      ]
+     },
+     {
+      "finding": "REDUCE_LIMITS",
+      "count_workloads_with_finding": 1,
+      "sample_names": null,
+      "examples": [
+       {
+        "k8s.cluster.name": "c1",
+        "k8s.workload.name": "c",
+        "pods": 1,
+        "containers": 1,
+        "p95_cpu_usage_mcores": 10,
+        "p95_cpu_requests_mcores": 20,
+        "p95_cpu_limits_mcores": 1000,
+        "throttling_p95": 0,
+        "recommended_request_mcores": null,
+        "recommended_limit_mcores": 100,
+        "limits_partial": false
+       }
+      ]
+     },
+     {
+      "finding": "REDUCE_REQUESTS",
+      "count_workloads_with_finding": 1,
+      "sample_names": null,
+      "examples": [
+       {
+        "k8s.cluster.name": "c1",
+        "k8s.workload.name": "d",
+        "pods": 1,
+        "containers": 1,
+        "p95_cpu_usage_mcores": 4,
+        "p95_cpu_requests_mcores": 390,
+        "p95_cpu_limits_mcores": 90,
+        "throttling_p95": 0,
+        "recommended_request_mcores": 50,
+        "recommended_limit_mcores": null,
+        "limits_partial": true
+       }
+      ]
+     },
+     {
+      "finding": "EXCLUDED_STATIC_POD",
+      "count_workloads_with_finding": 1,
+      "sample_names": [
+       "kube-apiserver-cp1"
+      ],
+      "examples": []
+     }
+    ]
+   }
+  ],
+  "k8s_workload_memory": [
+   {
+    "total_workloads": 3,
+    "analyzed_workloads": 3,
+    "excluded_workloads": 0,
+    "findings": [
+     {
+      "finding": "NO_LIMIT_SET",
+      "count_workloads_with_finding": 1,
+      "sample_names": null,
+      "examples": [
+       {
+        "k8s.cluster.name": "c1",
+        "k8s.workload.name": "a",
+        "pods": 1,
+        "containers": 1,
+        "p95_working_set_mib": 100,
+        "p95_requests_mib": null,
+        "p95_limits_mib": null,
+        "sum_oom_kills": 0,
+        "recommended_request_mib": 128,
+        "recommended_limit_mib": 160,
+        "limits_partial": false
+       }
+      ]
+     },
+     {
+      "finding": "INCREASE_LIMITS",
+      "count_workloads_with_finding": 1,
+      "sample_names": null,
+      "examples": [
+       {
+        "k8s.cluster.name": "c1",
+        "k8s.workload.name": "b",
+        "pods": 1,
+        "containers": 1,
+        "p95_working_set_mib": 240,
+        "p95_requests_mib": 256,
+        "p95_limits_mib": 256,
+        "sum_oom_kills": 0,
+        "recommended_request_mib": null,
+        "recommended_limit_mib": 384,
+        "limits_partial": false
+       }
+      ]
+     },
+     {
+      "finding": "NOMINAL",
+      "count_workloads_with_finding": 1,
+      "sample_names": null,
+      "examples": []
+     }
+    ]
+   }
+  ],
+  "k8s_cluster_cpu": [
+   {
+    "finding": "SCALE_DOWN",
+    "examples": [
+     {
+      "k8s.cluster.name": "c1",
+      "finding": "SCALE_DOWN",
+      "avg_node_count": 4,
+      "nodes_needed_for_cpu": 3,
+      "nodes_needed_for_memory": 2,
+      "minimum_nodes": 3,
+      "removable_nodes": 1,
+      "p95_cpu_requests_mcores": 8610
+     }
+    ]
+   }
+  ],
+  "k8s_cluster_memory": [
+   {
+    "k8s.cluster.name": "c1",
+    "nodes_needed_for_memory": 2
+   }
+  ],
+  "k8s_rightsizing": [
+   {
+    "k8s.cluster.name": "c1",
+    "avg_node_count": 4,
+    "analyzed_cpu_requests_percent": 75,
+    "analyzed_mem_requests_percent": 99,
+    "cpu_requests_now_mcores": 8610,
+    "cpu_requests_change_mcores": -2410,
+    "cpu_requests_after_mcores": 6200,
+    "mem_requests_now_gib": 17,
+    "mem_requests_change_gib": -1.1,
+    "mem_requests_after_gib": 15.9,
+    "nodes_needed_after_for_cpu": 3,
+    "nodes_needed_after_for_memory": 2,
+    "minimum_nodes_after": 3,
+    "removable_nodes_after": 1
+   }
+  ],
+  "host_utilization": [
+   {
+    "total_hosts": 3,
+    "utilization_groups": [
+     {
+      "utilization": "OVERPROVISIONED",
+      "k8s_cluster": null,
+      "count": 1,
+      "cpu_p90_min_percent": 28,
+      "cpu_p90_max_percent": 28,
+      "mem_p90_min_percent": 19,
+      "mem_p90_max_percent": 19,
+      "examples": [
+       {
+        "dt.entity.host.name": "h1",
+        "cpu_p90_percent": 28,
+        "mem_p90_percent": 19
+       }
+      ]
+     },
+     {
+      "utilization": "NOT_REPORTING",
+      "k8s_cluster": "c1",
+      "count": 2,
+      "cpu_p90_min_percent": 50,
+      "cpu_p90_max_percent": 100,
+      "mem_p90_min_percent": 50,
+      "mem_p90_max_percent": 81,
+      "examples": []
+     }
+    ]
+   }
+  ],
+  "disk_underutilized": [
+   {
+    "disk_count": 4,
+    "group_count": 2,
+    "total_reclaimable_gib": 246.1,
+    "groups": [
+     {
+      "mount": "/mnt/data",
+      "disk_size_gib": 93,
+      "disks": 3,
+      "max_used_gib": 1.8,
+      "recommended_size_gib": 20,
+      "reclaimable_gib": 218.7
+     },
+     {
+      "mount": "/",
+      "disk_size_gib": 57,
+      "disks": 1,
+      "max_used_gib": 20.3,
+      "recommended_size_gib": 30,
+      "reclaimable_gib": 27.4
+     }
+    ]
+   }
+  ]
+ },
+ "expect": []
+}

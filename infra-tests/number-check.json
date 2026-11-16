@@ -1,0 +1,76 @@
+[
+ {
+  "description": "copied values, a throttling score and a workload count pass",
+  "records": [
+   {
+    "p95_cpu_requests_mcores": 500,
+    "recommended_request_mcores": 1210,
+    "throttling_p95": 279,
+    "total_workloads": 97
+   }
+  ],
+  "text": "loadgen-angular: 요청 500 mcores → 1,210 mcores, 스로틀링 279. 전체 97개 워크로드",
+  "flagged": []
+ },
+ {
+  "description": "a node count the AI computed itself (notebook 3869dd80)",
+  "records": [
+   {
+    "p95_cpu_requests_mcores": 8610,
+    "cpu_allocatable_per_node_mcores": 3500,
+    "nodes_needed_for_cpu": 3
+   }
+  ],
+  "text": "8,610 / (3,500 x 0.85) = 3.26, so 4 nodes",
+  "flagged": [
+   "3.26"
+  ]
+ },
+ {
+  "description": "host names and instance types are names, not numbers",
+  "records": [
+   {
+    "cpu_p90_percent": 9
+   }
+  ],
+  "text": "ip-172-31-12-251.ap-northeast-2.compute.internal (e2-standard-4, m5.large): CPU p90 9%",
+  "flagged": []
+ },
+ {
+  "description": "a percent read as mcores (notebook b650889b)",
+  "records": [
+   {
+    "cpu_p90_percent": 11
+   }
+  ],
+  "text": "CPU 사용량 11 mcores",
+  "flagged": [
+   "11"
+  ]
+ },
+ {
+  "description": "a workload count the data does not have (notebook 3869dd80)",
+  "records": [
+   {
+    "total_workloads": 94,
+    "analyzed_workloads": 94
+   }
+  ],
+  "text": "311개 워크로드를 분석했습니다",
+  "flagged": [
+   "311"
+  ]
+ },
+ {
+  "description": "a value moved to another unit (MiB for GiB)",
+  "records": [
+   {
+    "p95_mem_requests_gib": 17
+   }
+  ],
+  "text": "메모리 요청 17 MiB",
+  "flagged": [
+   "17"
+  ]
+ }
+]

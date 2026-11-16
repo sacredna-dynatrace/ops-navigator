@@ -1,0 +1,51 @@
+//Kubernetes clusters, CPU: hourly averages summed per cluster, then p95 over 7 days. Millicores.
+// Also the node count both resources allow (memory requests are read here too), so the report
+// does not have to put the two queries together itself.
+timeseries {
+  allocatable = sum(dt.kubernetes.node.cpu_allocatable, rollup: avg),
+  usage = sum(dt.kubernetes.container.cpu_usage, rollup: avg),
+  limits = sum(dt.kubernetes.container.limits_cpu, rollup: avg),
+  requests = sum(dt.kubernetes.container.requests_cpu, rollup: avg),
+  nodes = avg(dt.kubernetes.nodes),
+  mem_allocatable = sum(dt.kubernetes.node.memory_allocatable, rollup: avg),
+  mem_requests = sum(dt.kubernetes.container.requests_memory, rollup: avg)
+}, by: { k8s.cluster.name, k8s.cluster.uid }, from: now()-7d, to: now(), interval: 1h
+| fieldsAdd p95_cpu_allocatable_mcores = round(arrayPercentile(allocatable, 95)),
+    p95_cpu_usage_mcores = round(arrayPercentile(usage, 95)),
+    p95_cpu_limits_mcores = round(arrayPercentile(limits, 95)),
+    p95_cpu_requests_mcores = round(arrayPercentile(requests, 95)),
+    avg_node_count = round(arrayAvg(nodes), decimals: 1)
+| fieldsAdd cpu_allocatable_per_node_mcores = if(avg_node_count > 0, round(p95_cpu_allocatable_mcores / avg_node_count))
+| fieldsAdd requests_percent_of_allocatable = round(100 * p95_cpu_requests_mcores / p95_cpu_allocatable_mcores),
+    usage_percent_of_allocatable = round(100 * p95_cpu_usage_mcores / p95_cpu_allocatable_mcores)
+// The fewest nodes that keep the cpu requests at or under 85% of allocatable (the SCALE_UP line),
+// at today's node size: requests / (allocatable per node * 0.85), rounded up. A node count change
+// has to satisfy this for CPU and memory alike.
+| fieldsAdd nodes_needed_for_cpu = if(cpu_allocatable_per_node_mcores > 0, ceil(p95_cpu_requests_mcores / (cpu_allocatable_per_node_mcores * 0.85)))
+| fieldsAdd mem_per_node = if(avg_node_count > 0, arrayPercentile(mem_allocatable, 95) / avg_node_count)
+| fieldsAdd nodes_needed_for_memory = if(mem_per_node > 0, ceil(arrayPercentile(mem_requests, 95) / (mem_per_node * 0.85)))
+// The smallest safe node count, which resource sets it, and how many nodes could go.
+| fieldsAdd minimum_nodes = arrayMax(array(nodes_needed_for_cpu, nodes_needed_for_memory))
+| fieldsAdd binding_resource = if(nodes_needed_for_cpu >= coalesce(nodes_needed_for_memory, 0), "CPU", else: "memory"),
+    removable_nodes = arrayMax(array(floor(avg_node_count - minimum_nodes), 0))
+| lookup [
+  smartscapeNodes "K8S_NODE"
+  | parse k8s.object, "JSON:k8s.object"
+  | fieldsAdd node.labels = `tags:k8s.labels`
+  | fields k8s.cluster.uid, instanceType=node.labels[`beta.kubernetes.io/instance-type`],
+  cloudType=substring(k8s.object[spec][providerID], to: indexOf(k8s.object[spec][providerID], ":"))
+], sourceField:k8s.cluster.uid, lookupField:k8s.cluster.uid, fields:{cloudType, instanceType}
+| fieldsAdd instanceType = if(contains(instanceType, ".") or contains(instanceType, "-") or contains(instanceType, "_"), instanceType)
+// One finding per cluster, from the node counts both resources allow - a CPU and a memory finding of
+// their own (requests under 40% or over 85% of allocatable) read as "memory says scale down" where CPU
+// kept every node.
+| fieldsAdd finding = coalesce(
+    if(minimum_nodes > avg_node_count, "SCALE_UP"),
+    if(removable_nodes > 0, "SCALE_DOWN"),
+    "NOMINAL"
+  )
+| sort p95_cpu_allocatable_mcores desc
+| summarize by:{finding}, {count_clusters_with_finding=count(), total_nodes=sum(avg_node_count), total_allocatable_mcores=sum(p95_cpu_allocatable_mcores), examples=collectArray(
+  record(k8s.cluster.name, finding, avg_node_count, p95_cpu_allocatable_mcores, p95_cpu_usage_mcores, p95_cpu_limits_mcores, p95_cpu_requests_mcores,
+    requests_percent_of_allocatable, usage_percent_of_allocatable, cpu_allocatable_per_node_mcores, nodes_needed_for_cpu, nodes_needed_for_memory, minimum_nodes, binding_resource, removable_nodes, cloudType, instanceType)
+, maxLength:5)}

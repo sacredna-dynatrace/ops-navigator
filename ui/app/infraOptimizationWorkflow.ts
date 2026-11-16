@@ -20,6 +20,15 @@ import { answerLanguageLine } from "./problemAnalysis";
  */
 
 /**
+ * v19: the queries checked against Kubernetes' own rules instead of report by report - unset requests
+ * and limits are null (a sum made them 0, so NO_REQUESTS_SET and NO_LIMIT_SET never fired), memory is
+ * summed per container like CPU, the replicas count in the after-rightsizing totals (a DaemonSet on 4
+ * nodes counted once: 49% analyzed for 75%), memory INCREASE_LIMITS means a working set near the limit
+ * (requests equal to the limit are Guaranteed QoS, not a risk), requests and limits are advised each
+ * on its own, hosts without data for 24 h are NOT_REPORTING (6 of 8 GKE node hosts, and a stopped VM
+ * told to grow), and the meanings say where throttling comes from. The scripts check the query results
+ * against each other (checkData) and show any contradiction as a data check above the tables; the
+ * same check runs on saved results before a push (npm run test:infra).
  * v18: limits and memory INCREASE_LIMITS described as what they are (a limit reserves nothing; the
  * memory finding means no room above the requests), only the findings the data has, left-out pods
  * split into no-controller and static with sample names (no assumed Spark), and a fixed change per
@@ -64,7 +73,7 @@ import { answerLanguageLine } from "./problemAnalysis";
  * to the trash (CLEANUP_TASK).
  * v2: the notebook's title names the domains it covers, and it gets a description.
  */
-export const INFRA_TEMPLATE_VERSION = 18;
+export const INFRA_TEMPLATE_VERSION = 19;
 export const INFRA_WORKFLOW_TITLE = "[Ops Navigator] Infrastructure Optimization";
 /** Finds every version, v1-v2 titled like Dynatrace's template included; the marker decides. */
 export const INFRA_WORKFLOW_SEARCH = "Infrastructure Optimization";
@@ -137,8 +146,8 @@ const QUERY_TITLES: Record<InfraQueryName, Record<InfraLanguage, string>> = {
   k8s_workload_memory: { Korean: "워크로드 메모리 (7일 p95)", English: "Workload memory (7-day p95)" },
   k8s_rightsizing: { Korean: "Pod 최적화 후 예상 (7일 p95)", English: "After pod rightsizing (7-day p95)" },
   host_utilization: { Korean: "호스트 사용률 (30일 p90)", English: "Host utilization (30-day p90)" },
-  disk_overutilized: { Korean: "과다 사용 디스크 (30일, 95% 초과)", English: "Over-utilized disks (30 days, > 95%)" },
-  disk_underutilized: { Korean: "과소 사용 디스크 (30일, 50% 미만)", English: "Under-utilized disks (30 days, < 50%)" },
+  disk_overutilized: { Korean: "과다 사용 디스크 (30일, 95% 초과, 동작 중인 호스트)", English: "Over-utilized disks (30 days, > 95%, hosts still reporting)" },
+  disk_underutilized: { Korean: "과소 사용 디스크 (30일, 50% 미만, 동작 중인 호스트)", English: "Under-utilized disks (30 days, < 50%, hosts still reporting)" },
   network_saturated_interfaces: { Korean: "포화 인터페이스 (7일 p95 85% 이상)", English: "Saturated interfaces (7-day p95 >= 85%)" },
   network_updown_interfaces: { Korean: "Up/Down 인터페이스", English: "Up/down interfaces" },
 };
@@ -213,10 +222,12 @@ const TABLES: Record<InfraQueryName, TableSpec> = {
     columns: [
       col("k8s.cluster.name", "클러스터", "Cluster"),
       col("k8s.workload.name", "워크로드", "Workload"),
+      col("pods", "Pod 수", "Pods"),
       col("containers", "컨테이너", "Containers"),
-      col("p95_cpu_usage_mcores", "사용량 (mcores)", "Usage (mcores)"),
-      col("p95_cpu_requests_mcores", "요청 (mcores)", "Requests (mcores)"),
-      col("p95_cpu_limits_mcores", "제한 (mcores)", "Limits (mcores)"),
+      col("p95_cpu_usage_mcores", "Pod당 사용량 (mcores)", "Usage per pod (mcores)"),
+      col("p95_cpu_requests_mcores", "Pod당 요청 (mcores)", "Requests per pod (mcores)"),
+      col("p95_cpu_limits_mcores", "Pod당 제한 (mcores)", "Limits per pod (mcores)"),
+      col("limits_partial", "제한 일부 미설정", "Limits partly unset"),
       col("throttling_p95", "스로틀링 지표", "Throttling indicator"),
       col("recommended_request_mcores", "권장 요청 (mcores)", "Recommended requests (mcores)", true),
       col("recommended_limit_mcores", "권장 제한 (mcores)", "Recommended limits (mcores)", true),
@@ -228,9 +239,12 @@ const TABLES: Record<InfraQueryName, TableSpec> = {
     columns: [
       col("k8s.cluster.name", "클러스터", "Cluster"),
       col("k8s.workload.name", "워크로드", "Workload"),
-      col("p95_working_set_mib", "사용량 (MiB)", "Working set (MiB)"),
-      col("p95_requests_mib", "요청 (MiB)", "Requests (MiB)"),
-      col("p95_limits_mib", "제한 (MiB)", "Limits (MiB)"),
+      col("pods", "Pod 수", "Pods"),
+      col("containers", "컨테이너", "Containers"),
+      col("p95_working_set_mib", "Pod당 사용량 (MiB)", "Working set per pod (MiB)"),
+      col("p95_requests_mib", "Pod당 요청 (MiB)", "Requests per pod (MiB)"),
+      col("p95_limits_mib", "Pod당 제한 (MiB)", "Limits per pod (MiB)"),
+      col("limits_partial", "제한 일부 미설정", "Limits partly unset"),
       col("sum_oom_kills", "OOMKill", "OOM kills"),
       col("recommended_request_mib", "권장 요청 (MiB)", "Recommended requests (MiB)", true),
       col("recommended_limit_mib", "권장 제한 (MiB)", "Recommended limits (MiB)", true),
@@ -242,6 +256,7 @@ const TABLES: Record<InfraQueryName, TableSpec> = {
       col("avg_node_count", "현재 노드 수", "Nodes now"),
       col("analyzed_cpu_requests_percent", "분석한 워크로드의 CPU 요청 비중 (%)", "Share of CPU requests in analyzed workloads (%)"),
       col("analyzed_mem_requests_percent", "분석한 워크로드의 메모리 요청 비중 (%)", "Share of memory requests in analyzed workloads (%)"),
+      col("excluded_names", "제외된 Pod (일부)", "Pods left out (some)"),
       col("cpu_requests_now_mcores", "CPU 요청 현재 (mcores)", "CPU requests now (mcores)"),
       col("cpu_requests_change_mcores", "CPU 요청 변화 (mcores)", "CPU requests change (mcores)"),
       col("cpu_requests_after_mcores", "CPU 요청 최적화 후 (mcores)", "CPU requests after (mcores)"),
@@ -327,14 +342,15 @@ const FINDINGS: [string, string, string][] = [
   ["NO_REQUESTS_SET", "요청 미설정", "No requests set"],
   ["INCREASE_REQUESTS", "요청 증가 필요", "Increase requests"],
   ["SCALE_UP", "확장 필요", "Scale up"],
-  ["UNDERPROVISIONED", "용량 부족", "Under-provisioned"],
+  ["UNDERPROVISIONED", "과소 프로비저닝", "Under-provisioned"],
   ["REDUCE_REQUESTS", "요청 감소 가능", "Reduce requests"],
   ["REDUCE_LIMITS", "제한 감소 가능", "Reduce limits"],
   ["SCALE_DOWN", "축소 가능", "Scale down"],
-  ["OVERPROVISIONED", "과다 할당", "Over-provisioned"],
+  ["OVERPROVISIONED", "과다 프로비저닝", "Over-provisioned"],
   ["UNUSED", "미사용 추정", "Possibly unused"],
   ["NOMINAL", "정상", "Nominal"],
   ["KUBERNETES_NODE", "Kubernetes 노드 (클러스터 섹션 참고)", "Kubernetes nodes (see the cluster section)"],
+  ["NOT_REPORTING", "24시간 데이터 없음 (교체·종료 추정)", "No data for 24 h (replaced or stopped)"],
   ["EXCLUDED_NO_CONTROLLER", "제외 (컨트롤러 없는 Pod)", "Left out (no controller)"],
   ["EXCLUDED_STATIC_POD", "제외 (정적 Pod)", "Left out (static pods)"],
 ];
@@ -378,14 +394,14 @@ const FAILED_LINE = `A data set given as ${QUERY_FAILED} could not be collected 
 const DATA_RULES = [
   "Data rules: use only values present in the data, exactly as given - they are already in the unit their field name says (_mcores, _mib, _gib, _percent); do not convert or recompute them. Write '-' only for a value that is null in the data.",
   "Recommended values are already computed: present recommended_request_* and recommended_limit_* exactly as given, and never write a recommended number of your own. A null recommended value means keep the current setting - say 'keep' (유지), not a number. Explain each recommendation briefly from the usage, requests and limits.",
-  "Where limit_below_request is true, the limit is a sum over containers some of which set no limit (0 means none set) - mention that the limit cannot be judged from the sum.",
+  "Workload values are per pod - one replica, its containers summed - and pods is the number of replicas; recommendations are per pod too (for a pod with several containers, they are split over its containers). A null request or limit means none is set. Where limits_partial is true, not every container sets a limit, so the pod's limit is not judged and gets no advice - say so once, without numbers.",
   "Do not write any tables - not even a table of counts - and do not list the examples row by row: data tables with every finding, count and example are added under your text automatically. Write prose and short bullets that interpret the data, and name only the few items that matter most, each with its own numbers.",
   "For a cluster, state the node counts as given and only in this form: CPU needs nodes_needed_for_cpu nodes and memory nodes_needed_for_memory, so at least minimum_nodes are needed and removable_nodes can go. Never call a resource binding, limiting or constraining (제한/결정 리소스). A node count is the requests divided by (allocatable per node x 0.85), rounded up - usage does not set it.",
   "Write the workload counts only in this form: of total_workloads workloads, analyzed_workloads were analyzed and excluded_workloads left out (전체 N개 중 M개를 분석하고 K개를 제외). Never add, subtract or otherwise combine counts yourself.",
   "throttling_p95 is a relative indicator: write it as a bare number, never followed by mcores or any other unit.",
   "Never use the word scheduling (스케줄링). For what a finding means, use the meanings the Kubernetes report lists - never your own.",
   "A cluster's finding is its node action, from minimum_nodes: SCALE_DOWN (removable_nodes can go), SCALE_UP (more nodes are needed) or NOMINAL. The memory data has figures only and no finding of its own - never present a memory-only scale-down.",
-  "After pod rightsizing gives each cluster's requests and node counts once every recommended request is applied: say what rightsizing does to the nodes only with the _after fields (nodes_needed_after_for_cpu, nodes_needed_after_for_memory, minimum_nodes_after, removable_nodes_after) - never repeat today's node counts as values after rightsizing - and never guess whether the requests rise or fall. analyzed_cpu_requests_percent and analyzed_mem_requests_percent show, per cluster, how much of the requests the advice covers; only for a cluster where a share is under 50%, say that most of those requests belong to the pods left out - name them from the excluded findings' sample_names - so sizing them is the larger lever.",
+  "After pod rightsizing gives each cluster's requests and node counts once every recommended request is applied: say what rightsizing does to the nodes only with the _after fields (nodes_needed_after_for_cpu, nodes_needed_after_for_memory, minimum_nodes_after, removable_nodes_after) - never repeat today's node counts as values after rightsizing - and never guess whether the requests rise or fall. analyzed_cpu_requests_percent and analyzed_mem_requests_percent show, per cluster, how much of the requests (every replica counted) the advice covers; only for a cluster where a share is under 50%, say that most of those requests belong to the pods left out - name them only from that cluster's excluded_names - so sizing them is the larger lever.",
   "Throttling concerns CPU only - never mention throttling for memory.",
   "A memory working set within about 1% of its limit can be page cache filling up to the limit: say that raising such a limit may only grow the cache, so check the container's actual need first.",
   "EXCLUDED_NO_CONTROLLER counts pods without a controller and EXCLUDED_STATIC_POD static pods (the control plane, kube-proxy): they are sized elsewhere. Give each count in one line and no advice, and say what they are only from their sample_names - never assume Spark or any other kind.",
@@ -479,18 +495,24 @@ Use the data provided in the context. Findings are already provided for scale; h
 A cluster's CPU and memory findings must be read together: the node count can go no lower than minimum_nodes, which the CPU data gives with the resource that sets it.
 
 # Meaning of each finding (use these words, not your own)
-- CPU INCREASE_REQUESTS or NO_REQUESTS_SET: the workload uses more CPU than it reserves, so on a busy node it gets less CPU than it needs and slows down. CPU never causes eviction.
-- CPU INCREASE_LIMITS: the workload is throttled at its limit.
+Each workload gets one finding - the most pressing - but its recommended requests and limits are each given on their own: present both where both are set.
+- CPU NO_REQUESTS_SET or INCREASE_REQUESTS: the workload reserves no CPU or less than it uses, so on a busy node it gets less CPU than it needs and slows down. CPU never causes eviction.
+- CPU INCREASE_LIMITS: the workload uses over 90% of its CPU limit and is throttled - the limit caps it.
+- Throttling comes only from a CPU limit, never from the requests: a workload can be throttled while its p95 usage is below the limit, by short bursts that hit it. Never explain throttling with the requests.
+- CPU REDUCE_LIMITS: the limit is far above use. A CPU limit reserves nothing, and under contention every pod still gets its requests, so a high CPU limit only lets the workload use idle CPU; lowering it is optional and makes performance more predictable.
 - CPU or memory REDUCE_REQUESTS: capacity is reserved but not used, which keeps other pods off the node.
-- CPU or memory REDUCE_LIMITS: the limit is far above use. A limit reserves nothing, but a high one lets the workload take far more than it reserves and crowd the other pods on its node.
 - Memory OOM_KILLS: the container reached its memory limit and was killed (OOM).
-- Memory INCREASE_LIMITS: the limit is at or just above the requests (within 10%), so the workload has no room to grow past its requests before an OOM kill.
-- Memory INCREASE_REQUESTS: the workload uses more memory than it reserves, so under memory pressure it is among the first evicted.
+- Memory INCREASE_LIMITS: the working set is within 10% of the limit, so the container is close to an OOM kill.
+- Memory NO_LIMIT_SET: no memory limit - the container can take node memory without bound.
+- Memory NO_REQUESTS_SET or INCREASE_REQUESTS: the workload reserves no memory or less than it uses, so under memory pressure it is among the first evicted.
+- Memory REDUCE_LIMITS: the limit is far above the working set. Memory above the requests is not reserved, so high limits let the node's memory be overcommitted, and under memory pressure the node evicts pods.
+- Requests equal to the limits (Guaranteed QoS) are a sound setting, not a finding.
 
 # Golden rules
-1. Mention every finding with its count from the data.
+1. Mention every finding with its count from the data - and only those: write nothing about a finding the data does not list, not even that there are none (no "0개"). A finding missing from the CPU data says nothing about throttling.
 2. Use the recommended values from the context as they are; do not adjust them.
-3. Leave the examples to the data tables under the report; name only the most important ones.`;
+3. Leave the examples to the data tables under the report; name only the most important ones.
+4. Name every workload with its cluster, as the data gives it: name (cluster).`;
 
 const K8S_INSTRUCTION = `Be sure the report includes an overview with total_workloads, analyzed_workloads and excluded_workloads, what each finding means, the priorities, and the resources that can be freed (removable_nodes) - no money amounts.
 Never write scheduling (스케줄링): requests below usage mean less CPU under contention and early eviction under memory pressure.
@@ -504,9 +526,10 @@ If a user wants to optimize the size of their hosts, they generally have three g
 3. Increase the size of under-provisioned hosts to reduce risk
 
 Be sure to provide an overview (total_hosts and the number of hosts per utilization) and any insights from the data provided. cpu_p90_percent and mem_p90_percent are percentages of the host's CPU and memory.
-Each group gives the range of its hosts (cpu_p90_min_percent to cpu_p90_max_percent, and the same for memory): describe a group only by its range - never by its examples, and never say what most hosts do.
+Each group gives the range of its hosts (cpu_p90_min_percent to cpu_p90_max_percent, and the same for memory): describe a group only by its range - never by its examples, and never say what most hosts do - and each group on its own: never merge two groups, their counts or their ranges.
 Hosts in a KUBERNETES_NODE group are Kubernetes nodes, one group per cluster (k8s_cluster); a node's host CPU covers everything on the host over 30 days, while the cluster figures are container requests over 7 days, so do not judge cluster capacity from it.
 For KUBERNETES_NODE hosts: give only the group's range and a pointer to the Kubernetes report's cluster section - no resizing, removing or adding, and no risk, pressure or capacity statements (the host data covers 30 days and includes nodes since replaced).
+NOT_REPORTING hosts sent no data in the last 24 hours - replaced Kubernetes nodes or stopped machines: give their count only, as gone, with no resizing, no risk statement and no host names.
 Change for each group (use these, not your own): UNUSED - candidates to shut down; OVERPROVISIONED - move to smaller instances (not shutting down); UNDERPROVISIONED - move to larger instances; NOMINAL - keep. No money amounts.`;
 
 const DISK_PROMPT = `Provide a markdown report for:
@@ -514,7 +537,7 @@ const DISK_PROMPT = `Provide a markdown report for:
 If disk utilization is not optimized, it can result in either wasted spend or worse preventable outages. If the user asked for disk optimization, you should provide two things:
 1. Disks that are overutilized and likely to fill
 2. Disks that are underutilized and will likely never fill, which can safely be shrunken
-Note: disks that are less than 50GiB are not relevant.
+Note: disks that are less than 50GiB are not relevant, and only hosts that sent data in the last 24 hours are in the data.
 For over-utilized disks, disk_size_gib is the disk's size, used_gib its average use, and never_used_gib the free space it never dipped below in 30 days.
 Under-utilized disks come grouped by mount point and size: each group gives how many disks it holds (disks), some of their hosts, the 30-day peak use (max_used_gib, max_disk_percent), the size to shrink each disk to (recommended_size_gib: the peak plus 30%) and the space the whole group frees (reclaimable_gib). disk_count, group_count and total_reclaimable_gib are the totals. Describe each group only by its own numbers - never generalize one group's size to all disks - and write that a disk is shrunk TO recommended_size_gib, freeing reclaimable_gib. For database data volumes, add that expected data growth should be checked before shrinking.`;
 
@@ -528,7 +551,8 @@ Then one line with the resources the reports say can be freed (nodes, GiB), copy
 const SUMMARY_INSTRUCTION = [
   "Start directly with the first bullet - no title, no introduction. Use only facts and numbers that appear in the reports; do not add new findings, and do not repeat a recommendation a report itself marks as not advisable.",
   "Copy every number exactly as the report states it and keep it with the item it belongs to - never move a value from one workload, cluster or disk to another, never add numbers up yourself, and add no percentage or amount the report does not give.",
-  "Throttling has no unit - never write mcores or any other unit for it.",
+  "Name a workload's cluster only as the report gives it next to that workload (name (cluster)) - never take a cluster from another sentence.",
+  "Throttling has no unit - never write mcores or any other unit for it - and it comes from CPU limits, never from the requests: never give low requests as its cause.",
   "For node counts, write only the CPU and memory node counts and the minimum as the Kubernetes report gives them - never call a resource binding or limiting. Adding or removing Kubernetes nodes comes only from the Kubernetes report's cluster section: never turn what the host report says about Kubernetes nodes into a cluster action.",
 ].join("\n");
 
@@ -796,6 +820,129 @@ const checkNumbers = (report, known, text) => {
   return { text: out + NL + NL + "> ⚠ " + text.unverified + listed, flagged };
 };
 
+// ---- Data check: query results that contradict each other point at a query bug, not a finding ----
+// Each rule below once failed silently in a report (v15-v18): a sum that made unset limits 0, a
+// "reduce" recommendation above the current value, a node count the two cluster queries disagreed on.
+// The scripts show what fails above the tables; npm run test:infra runs the same check on saved results.
+const num = (value) => (value === null || value === undefined || value === "" ? null : Number(value));
+const firstNested = (records, field) => (Array.isArray(records) && records[0] && Array.isArray(records[0][field]) ? records[0][field] : []);
+const examplesOf = (records) => (Array.isArray(records) ? records.flatMap((group) => (Array.isArray(group.examples) ? group.examples : [])) : []);
+const WORKLOAD_FIELDS = {
+  k8s_workload_cpu: { request: "p95_cpu_requests_mcores", limit: "p95_cpu_limits_mcores", recRequest: "recommended_request_mcores", recLimit: "recommended_limit_mcores", unit: "mcores" },
+  k8s_workload_memory: { request: "p95_requests_mib", limit: "p95_limits_mib", recRequest: "recommended_request_mib", recLimit: "recommended_limit_mib", unit: "MiB" },
+};
+const RAISING_REQUESTS = ["INCREASE_REQUESTS", "NO_REQUESTS_SET"];
+const RAISING_LIMITS = ["INCREASE_LIMITS", "OOM_KILLS", "NO_LIMIT_SET"];
+const hostClass = (cpu, memory) => (cpu < 10 && memory < 30 ? "UNUSED" : cpu < 30 && memory < 50 ? "OVERPROVISIONED" : cpu > 80 && memory < 85 ? "UNDERPROVISIONED" : "NOMINAL");
+
+/** Every contradiction in one domain's query results (byName: query name -> records), as text lines. */
+const checkData = (byName) => {
+  const issues = [];
+  const add = (query, item, problem) => issues.push(query + " · " + item + ": " + problem);
+
+  for (const [name, fields] of Object.entries(WORKLOAD_FIELDS)) {
+    const records = byName[name];
+    if (!Array.isArray(records) || !records[0]) continue;
+    const top = records[0];
+    const findings = firstNested(records, "findings");
+    const total = num(top.total_workloads);
+    const sum = findings.reduce((acc, group) => acc + (num(group.count_workloads_with_finding) ?? 0), 0);
+    if (total !== sum) add(name, "total_workloads", "the findings add up to " + sum + ", not " + total);
+    if (num(top.analyzed_workloads) + num(top.excluded_workloads) !== total) add(name, "analyzed_workloads", "analyzed + left out is not the total");
+    for (const group of findings) {
+      const finding = String(group.finding);
+      if (findingRank(finding) >= FINDINGS.length) add(name, finding, "unknown finding");
+      for (const row of Array.isArray(group.examples) ? group.examples : []) {
+        const item = row["k8s.workload.name"] + " (" + row["k8s.cluster.name"] + ")";
+        const request = num(row[fields.request]);
+        const limit = num(row[fields.limit]);
+        const recRequest = num(row[fields.recRequest]);
+        const recLimit = num(row[fields.recLimit]);
+        const partial = row.limits_partial === true;
+        if (request === 0 || limit === 0) add(name, item, "a request or limit of 0 - one not set must be null");
+        if (finding.startsWith("EXCLUDED") && (recRequest !== null || recLimit !== null)) add(name, item, "advice for a workload left out");
+        if (RAISING_REQUESTS.includes(finding) && !(recRequest !== null && (request === null || recRequest > request))) add(name, item, finding + " without a higher recommended request");
+        if (finding === "REDUCE_REQUESTS" && !(recRequest !== null && request !== null && recRequest < request)) add(name, item, "REDUCE_REQUESTS without a lower recommended request");
+        if (finding === "REDUCE_LIMITS" && !(recLimit !== null && limit !== null && recLimit < limit)) add(name, item, "REDUCE_LIMITS without a lower recommended limit");
+        if (RAISING_LIMITS.includes(finding) && !partial && !(recLimit !== null && (limit === null || recLimit > limit))) add(name, item, finding + " without a higher recommended limit");
+        if (partial && recLimit !== null) add(name, item, "limit advice although not every container sets a limit");
+        const newRequest = recRequest ?? request;
+        const newLimit = recLimit ?? limit;
+        if (!partial && newRequest !== null && newLimit !== null && newRequest > newLimit) add(name, item, "the request would end above the limit (" + newRequest + " > " + newLimit + " " + fields.unit + ")");
+      }
+    }
+  }
+
+  const clusters = examplesOf(byName.k8s_cluster_cpu);
+  for (const row of clusters) {
+    const item = String(row["k8s.cluster.name"]);
+    const nodes = num(row.avg_node_count);
+    const minimum = num(row.minimum_nodes);
+    const removable = num(row.removable_nodes);
+    if (minimum !== Math.max(num(row.nodes_needed_for_cpu) ?? 0, num(row.nodes_needed_for_memory) ?? 0)) add("k8s_cluster_cpu", item, "minimum_nodes is not the larger of the CPU and memory node counts");
+    if (removable !== Math.max(Math.floor(nodes - minimum), 0)) add("k8s_cluster_cpu", item, "removable_nodes does not follow from the node counts");
+    const expected = minimum > nodes ? "SCALE_UP" : removable > 0 ? "SCALE_DOWN" : "NOMINAL";
+    if (row.finding !== expected) add("k8s_cluster_cpu", item, "finding " + row.finding + " where the node counts say " + expected);
+  }
+  for (const row of Array.isArray(byName.k8s_cluster_memory) ? byName.k8s_cluster_memory : []) {
+    const item = String(row["k8s.cluster.name"]);
+    const cpu = clusters.find((entry) => entry["k8s.cluster.name"] === row["k8s.cluster.name"]);
+    if (cpu && num(cpu.nodes_needed_for_memory) !== num(row.nodes_needed_for_memory)) add("k8s_cluster_memory", item, "memory needs " + row.nodes_needed_for_memory + " nodes here and " + cpu.nodes_needed_for_memory + " in the CPU query");
+  }
+  for (const row of Array.isArray(byName.k8s_rightsizing) ? byName.k8s_rightsizing : []) {
+    const item = String(row["k8s.cluster.name"]);
+    if (num(row.cpu_requests_now_mcores) + num(row.cpu_requests_change_mcores) !== num(row.cpu_requests_after_mcores)) add("k8s_rightsizing", item, "CPU requests now + change is not the value after");
+    if (Math.abs(num(row.mem_requests_now_gib) + num(row.mem_requests_change_gib) - num(row.mem_requests_after_gib)) > 0.11) add("k8s_rightsizing", item, "memory requests now + change is not the value after");
+    for (const field of ["analyzed_cpu_requests_percent", "analyzed_mem_requests_percent"]) {
+      const share = num(row[field]);
+      if (share !== null && (share < 0 || share > 101)) add("k8s_rightsizing", item, field + " is " + share);
+    }
+    const minimum = num(row.minimum_nodes_after);
+    if (minimum !== Math.max(num(row.nodes_needed_after_for_cpu) ?? 0, num(row.nodes_needed_after_for_memory) ?? 0)) add("k8s_rightsizing", item, "minimum_nodes_after is not the larger of the node counts after");
+    if (num(row.removable_nodes_after) !== Math.max(Math.floor(num(row.avg_node_count) - minimum), 0)) add("k8s_rightsizing", item, "removable_nodes_after does not follow from the node counts");
+    const cpu = clusters.find((entry) => entry["k8s.cluster.name"] === row["k8s.cluster.name"]);
+    if (cpu && num(cpu.p95_cpu_requests_mcores) !== num(row.cpu_requests_now_mcores)) add("k8s_rightsizing", item, "CPU requests now differ from the cluster query (" + row.cpu_requests_now_mcores + " / " + cpu.p95_cpu_requests_mcores + ")");
+  }
+
+  const hosts = byName.host_utilization;
+  if (Array.isArray(hosts) && hosts[0]) {
+    const groups = firstNested(hosts, "utilization_groups");
+    const sum = groups.reduce((acc, group) => acc + (num(group.count) ?? 0), 0);
+    if (sum !== num(hosts[0].total_hosts)) add("host_utilization", "total_hosts", "the groups add up to " + sum + ", not " + hosts[0].total_hosts);
+    for (const group of groups) {
+      const item = group.utilization + (group.k8s_cluster ? " " + group.k8s_cluster : "");
+      if (num(group.cpu_p90_min_percent) > num(group.cpu_p90_max_percent) || num(group.mem_p90_min_percent) > num(group.mem_p90_max_percent)) add("host_utilization", item, "a range runs backwards");
+      // Kubernetes nodes and hosts gone quiet are grouped by what they are, not by their values.
+      if (group.utilization === "KUBERNETES_NODE" || group.utilization === "NOT_REPORTING") continue;
+      for (const row of Array.isArray(group.examples) ? group.examples : []) {
+        const own = hostClass(num(row.cpu_p90_percent), num(row.mem_p90_percent));
+        if (own !== group.utilization) add("host_utilization", String(row["dt.entity.host.name"]), "in " + group.utilization + " where its values say " + own);
+      }
+    }
+  }
+
+  const disks = byName.disk_underutilized;
+  if (Array.isArray(disks) && disks[0]) {
+    const groups = Array.isArray(disks[0].groups) ? disks[0].groups : [];
+    for (const group of groups) {
+      const item = group.mount + " " + group.disk_size_gib + " GiB";
+      const size = num(group.disk_size_gib);
+      const recommended = num(group.recommended_size_gib);
+      const count = num(group.disks);
+      if (recommended < num(group.max_used_gib)) add("disk_underutilized", item, "recommended size under the peak use");
+      if (recommended >= size) add("disk_underutilized", item, "recommended size not smaller than the disk");
+      if (Math.abs((size - recommended) * count - num(group.reclaimable_gib)) > count * 0.6 + 0.1) add("disk_underutilized", item, "reclaimable_gib does not follow from the sizes");
+    }
+    if (groups.length === num(disks[0].group_count)) {
+      const sum = groups.reduce((acc, group) => acc + num(group.reclaimable_gib), 0);
+      if (Math.abs(sum - num(disks[0].total_reclaimable_gib)) > 0.1 * groups.length + 0.1) add("disk_underutilized", "total_reclaimable_gib", "the groups add up to " + Math.round(sum * 10) / 10);
+      const diskSum = groups.reduce((acc, group) => acc + num(group.disks), 0);
+      if (diskSum !== num(disks[0].disk_count)) add("disk_underutilized", "disk_count", "the groups add up to " + diskSum + " disks");
+    }
+  }
+  return issues;
+};
+
 const TEXT = {
   Korean: {
     name: "[인프라 최적화] ",
@@ -830,6 +977,8 @@ const TEXT = {
     sample: (shown, total) => "전체 " + total + "개 중 " + shown + "개 예시입니다.",
     forExample: "예:",
     unverified: "데이터에서 찾지 못한 수치입니다. AI가 계산하거나 추정한 값일 수 있으니 아래 표의 값으로 확인하세요: ",
+    dataCheck: "데이터 점검:",
+    dataCheckNote: "쿼리 결과끼리 맞지 않는 값이 있습니다. 쿼리 오류일 수 있으니 해당 항목은 조치 전에 원본 데이터로 확인하세요.",
   },
   English: {
     name: "[Infra Optimization] ",
@@ -864,6 +1013,8 @@ const TEXT = {
     sample: (shown, total) => shown + " examples of " + total + ".",
     forExample: "for example",
     unverified: "Numbers not found in the data - the AI may have computed or estimated them, so check them against the tables: ",
+    dataCheck: "Data check:",
+    dataCheckNote: "some query results contradict each other. That can be a query error, so check these items against the raw data before acting on them.",
   },
 };
 
@@ -902,6 +1053,7 @@ async function collect(execution_id) {
     // The data tables, drawn here from each query task's records - never copied by the AI.
     const data = [];
     const known = newKnown();
+    const byName = {};
     for (const item of entry.queries) {
       let records = null;
       try {
@@ -910,12 +1062,16 @@ async function collect(execution_id) {
       } catch (error) {
         records = null;
       }
+      byName[item.name] = records;
       collectNumbers(records, known);
       collectNumbers(records, allKnown);
       data.push("#### " + item.title[language] + NL + NL + renderData(item.table, records, language, text));
     }
+    // Contradictions between the query results go above the tables, so no one acts on them unseen.
+    const issues = checkData(byName);
+    if (issues.length > 0) data.unshift("> ⚠ **" + text.dataCheck + "** " + text.dataCheckNote + NL + issues.slice(0, 20).map((issue) => "> - " + issue).join(NL) + (issues.length > 20 ? NL + "> - " + text.more(issues.length - 20) : ""));
     const checked = report ? checkNumbers(report, known, text) : { text: "", flagged: [] };
-    reports.push({ entry, report: checked.text, flagged: checked.flagged, data: "### " + entry.title[language] + " - " + text.tables + NL + NL + data.join(NL + NL) });
+    reports.push({ entry, report: checked.text, flagged: checked.flagged, issues, data: "### " + entry.title[language] + " - " + text.tables + NL + NL + data.join(NL + NL) });
   }
 
   // Titles and subjects name the domains that produced a report ("All" for all four): a list of
@@ -952,6 +1108,13 @@ async function collect(execution_id) {
 }
 `;
 };
+
+/**
+ * The script part the notebook and email tasks share (collectReports), for scripts/infra-check.mjs:
+ * it runs the very code the workflow runs on saved query results - renderData, checkData,
+ * checkNumbers and collect.
+ */
+export const infraReportScript = () => collectReports();
 
 /** The notebook: title and scope, each report, then the queries behind it to rerun. */
 const notebookScript = () => `// ${MARKER}

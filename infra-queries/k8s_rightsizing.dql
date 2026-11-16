@@ -1,0 +1,80 @@
+//Kubernetes clusters after pod rightsizing: the requests once every recommended request is applied to
+// every replica, and the nodes they need. The request rules repeat k8s_workload_cpu and
+// k8s_workload_memory - keep them in step. An estimate: the change is added to the cluster's p95 requests.
+timeseries {
+  cpu_allocatable = sum(dt.kubernetes.node.cpu_allocatable, rollup: avg),
+  cpu_requests = sum(dt.kubernetes.container.requests_cpu, rollup: avg),
+  mem_allocatable = sum(dt.kubernetes.node.memory_allocatable, rollup: avg),
+  mem_requests = sum(dt.kubernetes.container.requests_memory, rollup: avg),
+  nodes = avg(dt.kubernetes.nodes)
+}, by: { k8s.cluster.name }, from: now()-7d, to: now(), interval: 1h
+| fieldsAdd avg_node_count = round(arrayAvg(nodes), decimals: 1),
+    cpu_requests_now_mcores = round(arrayPercentile(cpu_requests, 95)),
+    mem_requests_now_gib = round(arrayPercentile(mem_requests, 95) / 1073741824, decimals: 1)
+| fieldsAdd cpu_per_node = if(avg_node_count > 0, arrayPercentile(cpu_allocatable, 95) / avg_node_count),
+    mem_per_node_gib = if(avg_node_count > 0, arrayPercentile(mem_allocatable, 95) / 1073741824 / avg_node_count)
+// CPU per workload (k8s_workload_cpu's request rule), times its replicas. v15-v18 left the replicas out:
+// a DaemonSet on 4 nodes counted once, and diw85600 read 49% of its CPU requests as analyzed for 75%.
+| lookup [
+  timeseries {
+    use = percentile(dt.kubernetes.container.cpu_usage, 95, rollup:max, scalar: true),
+    req = percentile(dt.kubernetes.container.requests_cpu, 95, rollup:max, scalar: true)
+  }, union: TRUE, by: { k8s.cluster.name, k8s.workload.name, k8s.workload.kind, k8s.container.name }, from: now()-7d, to: now()
+  | fieldsAdd req = if(req > 0, req)
+  | summarize by:{ k8s.cluster.name, k8s.workload.name, k8s.workload.kind }, { with_req = countIf(isNotNull(req)), sum_req = sum(req), use = round(sum(use)) }
+  | fieldsAdd req = if(with_req > 0, round(sum_req))
+  | fieldsAdd key = concat(k8s.cluster.name, "/", k8s.workload.name)
+  | lookup [
+    timeseries pods = sum(dt.kubernetes.pods, rollup: avg), by: { k8s.cluster.name, k8s.workload.name }, from: now()-7d, to: now(), interval: 1h
+    | fields key = concat(k8s.cluster.name, "/", k8s.workload.name), pods = round(arrayPercentile(pods, 95))
+  ], sourceField: key, lookupField: key, fields: { pods }
+  | fieldsAdd pods = coalesce(pods, 1), excluded = in(k8s.workload.kind, {"pod", "staticpod"})
+  | fieldsAdd target = arrayMax(array(ceil(use * 1.2 / 10) * 10, 50))
+  | fieldsAdd rec = if(not excluded, coalesce(if(isNull(req) or use > req, target), if(req > use * 2 and target < req, target)))
+  | fieldsAdd change = (coalesce(rec, req, 0) - coalesce(req, 0)) * pods
+  | summarize by:{ k8s.cluster.name }, {
+      cpu_change = sum(if(not excluded, change, else: 0)),
+      cpu_analyzed = sum(if(not excluded, coalesce(req, 0) * pods, else: 0)),
+      excluded_names = collectDistinct(if(excluded, k8s.workload.name), maxLength: 6) }
+], sourceField: k8s.cluster.name, lookupField: k8s.cluster.name, fields: { cpu_change, cpu_analyzed, excluded_names }
+// Memory: the same with k8s_workload_memory's request rule.
+| lookup [
+  timeseries {
+    req = percentile(dt.kubernetes.container.requests_memory, 95, rollup: max, scalar: true),
+    ws = percentile(dt.kubernetes.container.memory_working_set, 95, rollup: max, scalar: true)
+  }, union: TRUE, by: { k8s.cluster.name, k8s.workload.name, k8s.workload.kind, k8s.container.name }, from: now()-7d, to: now()
+  | fieldsAdd req = if(req > 0, req)
+  | summarize by:{ k8s.cluster.name, k8s.workload.name, k8s.workload.kind }, { with_req = countIf(isNotNull(req)), sum_req = sum(req), working_set_mib = round(sum(ws) / 1048576) }
+  | fieldsAdd requests_mib = if(with_req > 0, round(sum_req / 1048576))
+  | fieldsAdd key = concat(k8s.cluster.name, "/", k8s.workload.name)
+  | lookup [
+    timeseries pods = sum(dt.kubernetes.pods, rollup: avg), by: { k8s.cluster.name, k8s.workload.name }, from: now()-7d, to: now(), interval: 1h
+    | fields key = concat(k8s.cluster.name, "/", k8s.workload.name), pods = round(arrayPercentile(pods, 95))
+  ], sourceField: key, lookupField: key, fields: { pods }
+  | fieldsAdd pods = coalesce(pods, 1), excluded = in(k8s.workload.kind, {"pod", "staticpod"})
+  | fieldsAdd target = arrayMax(array(ceil(working_set_mib * 1.2 / 16) * 16, 64))
+  | fieldsAdd rec = if(not excluded, coalesce(if(isNull(requests_mib) or working_set_mib > requests_mib, target), if(requests_mib > working_set_mib * 1.5 and target < requests_mib, target)))
+  | fieldsAdd change = (coalesce(rec, requests_mib, 0) - coalesce(requests_mib, 0)) * pods
+  | summarize by:{ k8s.cluster.name }, {
+      mem_change_mib = sum(if(not excluded, change, else: 0)),
+      mem_analyzed_mib = sum(if(not excluded, coalesce(requests_mib, 0) * pods, else: 0)) }
+], sourceField: k8s.cluster.name, lookupField: k8s.cluster.name, fields: { mem_change_mib, mem_analyzed_mib }
+// How much of the cluster's requests the analyzed workloads hold; the rest belongs to the pods left out
+// (excluded_names: a few of this cluster's), which rightsizing does not touch.
+| fieldsAdd analyzed_cpu_requests_percent = if(cpu_requests_now_mcores > 0, round(100 * coalesce(cpu_analyzed, 0) / cpu_requests_now_mcores)),
+    analyzed_mem_requests_percent = if(mem_requests_now_gib > 0, round(100 * coalesce(mem_analyzed_mib, 0) / 1024 / mem_requests_now_gib))
+| fieldsAdd excluded_names = arrayRemoveNulls(excluded_names)
+| fieldsAdd cpu_requests_change_mcores = round(coalesce(cpu_change, 0)),
+    mem_requests_change_gib = round(coalesce(mem_change_mib, 0) / 1024, decimals: 1)
+| fieldsAdd cpu_requests_after_mcores = cpu_requests_now_mcores + cpu_requests_change_mcores,
+    mem_requests_after_gib = round(mem_requests_now_gib + mem_requests_change_gib, decimals: 1)
+| fieldsAdd nodes_needed_after_for_cpu = if(cpu_per_node > 0, ceil(cpu_requests_after_mcores / (cpu_per_node * 0.85))),
+    nodes_needed_after_for_memory = if(mem_per_node_gib > 0, ceil(mem_requests_after_gib / (mem_per_node_gib * 0.85)))
+| fieldsAdd minimum_nodes_after = arrayMax(array(nodes_needed_after_for_cpu, nodes_needed_after_for_memory))
+| fieldsAdd removable_nodes_after = arrayMax(array(floor(avg_node_count - minimum_nodes_after), 0))
+| sort cpu_requests_now_mcores desc
+| fields k8s.cluster.name, avg_node_count,
+    analyzed_cpu_requests_percent, analyzed_mem_requests_percent, excluded_names,
+    cpu_requests_now_mcores, cpu_requests_change_mcores, cpu_requests_after_mcores, nodes_needed_after_for_cpu,
+    mem_requests_now_gib, mem_requests_change_gib, mem_requests_after_gib, nodes_needed_after_for_memory,
+    minimum_nodes_after, removable_nodes_after

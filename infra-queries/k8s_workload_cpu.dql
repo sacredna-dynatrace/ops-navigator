@@ -1,0 +1,73 @@
+//Kubernetes workloads, CPU: p95 over 7 days per container, summed over the pod's containers - one replica (pods gives how many). Millicores.
+timeseries {
+  usage = percentile(dt.kubernetes.container.cpu_usage, 95, rollup:max, scalar: true),
+  throttled = percentile(dt.kubernetes.container.cpu_throttled, 95, rollup:max, scalar: true),
+  requests = percentile(dt.kubernetes.container.requests_cpu, 95, rollup:max, scalar: true),
+  limits = percentile(dt.kubernetes.container.limits_cpu, 95, rollup:max, scalar: true)
+}, union: TRUE, by: { k8s.cluster.name, k8s.workload.name, k8s.workload.kind, k8s.container.name },
+from: now()-7d, to: now()
+// A request or limit of 0 is none set. A sum over containers that set none came out 0, not null, so
+// NO_REQUESTS_SET never fired and missing limits read as "limit 0" (diw85600, notebook 9cf855a3).
+| fieldsAdd requests = if(requests > 0, requests), limits = if(limits > 0, limits)
+| summarize by:{ k8s.cluster.name, k8s.workload.name, k8s.workload.kind }, {
+    containers = count(),
+    containers_with_requests = countIf(isNotNull(requests)),
+    containers_with_limits = countIf(isNotNull(limits)),
+    sum_requests = sum(requests), sum_limits = sum(limits),
+    p95_cpu_usage = round(sum(usage)), p95_cpu_throttled = round(sum(throttled)) }
+| fieldsAdd p95_cpu_requests = if(containers_with_requests > 0, round(sum_requests)),
+    p95_cpu_limits = if(containers_with_limits > 0, round(sum_limits))
+// limits_partial: some containers set no limit (or the sum is under the requests) - the pod's limit
+// cannot be judged from the sum, so it gets no limit finding or advice.
+| fieldsAdd limits_partial = (containers_with_limits > 0 and containers_with_limits < containers) or (isNotNull(p95_cpu_limits) and isNotNull(p95_cpu_requests) and p95_cpu_limits < p95_cpu_requests)
+// Replicas: the p95 of the hourly pod count. Values above are per pod.
+| fieldsAdd key = concat(k8s.cluster.name, "/", k8s.workload.name)
+| lookup [
+  timeseries pods = sum(dt.kubernetes.pods, rollup: avg), by: { k8s.cluster.name, k8s.workload.name }, from: now()-7d, to: now(), interval: 1h
+  | fields key = concat(k8s.cluster.name, "/", k8s.workload.name), pods = round(arrayPercentile(pods, 95))
+], sourceField: key, lookupField: key, fields: { pods }
+// Pods without a controller (Spark executors, Longhorn instance-managers) and static pods (the control
+// plane) are renamed on every run or sized elsewhere: counted, never given advice.
+| fieldsAdd excluded = in(k8s.workload.kind, {"pod", "staticpod"})
+// Requests and limits are advised each on its own - a workload can need both. Requests: 120% of p95
+// usage rounded up to 10 m, at least 50 m, where usage is above the requests (or none are set) or
+// under half of them. k8s_rightsizing repeats this rule - keep them in step.
+| fieldsAdd target_request = arrayMax(array(ceil(p95_cpu_usage * 1.2 / 10) * 10, 50))
+| fieldsAdd recommended_request_mcores = if(not excluded, coalesce(
+    if(isNull(p95_cpu_requests) or p95_cpu_usage > p95_cpu_requests, target_request),
+    if(p95_cpu_requests > p95_cpu_usage * 2 and target_request < p95_cpu_requests, target_request)
+  ))
+| fieldsAdd effective_request = coalesce(recommended_request_mcores, p95_cpu_requests, 0)
+// Limits: throttled while using 90% of the limit -> 150% of usage; a raised request above the limit ->
+// 150% of the request; never throttled and over 3x usage -> 2x usage, never under the request or 100 m.
+| fieldsAdd near_limit = not limits_partial and p95_cpu_throttled > 0 and p95_cpu_usage > 0.9 * p95_cpu_limits
+| fieldsAdd reduce_limit_to = ceil(arrayMax(array(p95_cpu_usage * 2, effective_request, 100)) / 10) * 10
+| fieldsAdd recommended_limit_mcores = if(not excluded and not limits_partial and isNotNull(p95_cpu_limits), coalesce(
+    if(near_limit, ceil(arrayMax(array(p95_cpu_usage, effective_request)) * 1.5 / 10) * 10),
+    if(effective_request > p95_cpu_limits, ceil(effective_request * 1.5 / 10) * 10),
+    if(p95_cpu_throttled == 0 and p95_cpu_limits > 3 * p95_cpu_usage and reduce_limit_to < p95_cpu_limits, reduce_limit_to)
+  ))
+// The finding names the most pressing of them; the recommendations above stand regardless.
+| fieldsAdd finding = coalesce(
+    if(k8s.workload.kind == "staticpod", "EXCLUDED_STATIC_POD"),
+    if(k8s.workload.kind == "pod", "EXCLUDED_NO_CONTROLLER"),
+    if(isNull(p95_cpu_requests), "NO_REQUESTS_SET"),
+    if(near_limit, "INCREASE_LIMITS"),
+    if(p95_cpu_usage > p95_cpu_requests, "INCREASE_REQUESTS"),
+    if(isNotNull(recommended_request_mcores), "REDUCE_REQUESTS"),
+    if(recommended_limit_mcores < p95_cpu_limits, "REDUCE_LIMITS"),
+    "NOMINAL"
+  )
+| sort p95_cpu_requests desc
+| summarize by:{finding}, {count_workloads_with_finding = count(), names = collectDistinct(k8s.workload.name, maxLength: 5), examples = collectArray(
+  record(k8s.cluster.name, k8s.workload.name, pods, containers, p95_cpu_usage_mcores = p95_cpu_usage, p95_cpu_requests_mcores = p95_cpu_requests, p95_cpu_limits_mcores = p95_cpu_limits, throttling_p95 = p95_cpu_throttled, recommended_request_mcores, recommended_limit_mcores, limits_partial)
+, maxLength:8)}
+// No examples for NOMINAL: nothing to do there, and the AI's input stays small.
+// What was left out, by a few of its names.
+| fieldsAdd sample_names = if(in(finding, {"EXCLUDED_NO_CONTROLLER", "EXCLUDED_STATIC_POD"}), names)
+| fieldsAdd examples = if(in(finding, {"NOMINAL", "EXCLUDED_NO_CONTROLLER", "EXCLUDED_STATIC_POD"}), array(), else: examples)
+// One record: the workloads analyzed and left out, then each finding with its examples.
+| summarize { total_workloads = sum(count_workloads_with_finding),
+    analyzed_workloads = sum(if(not in(finding, {"EXCLUDED_NO_CONTROLLER", "EXCLUDED_STATIC_POD"}), count_workloads_with_finding, else: 0)),
+    excluded_workloads = sum(if(in(finding, {"EXCLUDED_NO_CONTROLLER", "EXCLUDED_STATIC_POD"}), count_workloads_with_finding, else: 0)),
+    findings = collectArray(record(finding, count_workloads_with_finding, sample_names, examples)) }

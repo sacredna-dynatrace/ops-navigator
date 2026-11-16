@@ -1,0 +1,30 @@
+//Over-utilized disks: above 95% at some point in 30 days, 50 GiB or larger. GiB.
+timeseries {
+  max_disk_percent = max(dt.host.disk.used.percent, scalar: true),
+  p90_disk_percent = percentile(dt.host.disk.used.percent, rollup:max, 90, scalar:true),
+  avg_disk_percent = avg(dt.host.disk.used.percent, scalar:true),
+  used_bytes = avg(dt.host.disk.used, scalar: true),
+  avail_bytes = avg(dt.host.disk.avail, scalar: true),
+  min_avail_bytes = min(dt.host.disk.avail, scalar: true)
+},
+  by: { dt.entity.host, dt.entity.disk },
+  from: now()-30d, to: now()
+| fieldsAdd dt.entity.host.name = entityName(dt.entity.host), dt.entity.disk.name = entityName(dt.entity.disk)
+// Only hosts with data in the last 24 h: a stopped VM's disk is not one to resize.
+| lookup [
+  timeseries seen = avg(dt.host.disk.used.percent), by: { dt.entity.host }, from: now()-24h
+  | fields dt.entity.host, reporting = true
+], sourceField: dt.entity.host, lookupField: dt.entity.host, fields: { reporting }
+| filter reporting == true
+// Container filesystems (overlay mounts, kubelet and runtime volumes) repeat the host's own disks.
+| filter not (startsWith(dt.entity.disk.name, "/var/lib/docker") or startsWith(dt.entity.disk.name, "/var/lib/kubelet") or startsWith(dt.entity.disk.name, "/var/lib/containerd") or startsWith(dt.entity.disk.name, "/run/containerd") or startsWith(dt.entity.disk.name, "/var/lib/rancher") or contains(dt.entity.disk.name, "/overlay"))
+// The disk's size is used + available; "never_used_gib" is the free space it never dipped below.
+| fieldsAdd disk_size_gib = round((used_bytes + avail_bytes) / 1073741824, decimals: 1),
+    used_gib = round(used_bytes / 1073741824, decimals: 1),
+    never_used_gib = round(min_avail_bytes / 1073741824, decimals: 1),
+    max_disk_percent = round(max_disk_percent), p90_disk_percent = round(p90_disk_percent), avg_disk_percent = round(avg_disk_percent)
+| filter disk_size_gib >= 50 and max_disk_percent > 95
+| sort p90_disk_percent desc
+| summarize {count = count(), examples = collectArray(
+  record(dt.entity.host.name, dt.entity.disk.name, disk_size_gib, used_gib, never_used_gib, max_disk_percent, p90_disk_percent, avg_disk_percent)
+, maxLength: 10)}

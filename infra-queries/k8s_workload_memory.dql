@@ -1,0 +1,76 @@
+//Kubernetes workloads, memory: p95 over 7 days per container, summed over the pod's containers - one replica (pods gives how many). MiB.
+timeseries {
+  limits = percentile(dt.kubernetes.container.limits_memory, 95, rollup: max, scalar: true),
+  requests = percentile(dt.kubernetes.container.requests_memory, 95, rollup: max, scalar: true),
+  working_set = percentile(dt.kubernetes.container.memory_working_set, 95, rollup: max, scalar: true),
+  oom_kills = sum(dt.kubernetes.container.oom_kills, scalar: true)
+}, union: TRUE, by: { k8s.cluster.name, k8s.workload.name, k8s.workload.kind, k8s.container.name },
+from: now()-7d, to: now()
+// Per container, as the CPU query: grouped by workload alone, the percentile ran over every
+// container's samples and gave one container's value, not the pod's. A request or limit of 0 is none set.
+| fieldsAdd requests = if(requests > 0, requests), limits = if(limits > 0, limits)
+| summarize by:{ k8s.cluster.name, k8s.workload.name, k8s.workload.kind }, {
+    containers = count(),
+    containers_with_requests = countIf(isNotNull(requests)),
+    containers_with_limits = countIf(isNotNull(limits)),
+    sum_requests = sum(requests), sum_limits = sum(limits),
+    working_set_mib = round(sum(working_set) / 1048576), sum_oom_kills = sum(oom_kills) }
+| fieldsAdd requests_mib = if(containers_with_requests > 0, round(sum_requests / 1048576)),
+    limits_mib = if(containers_with_limits > 0, round(sum_limits / 1048576)),
+    sum_oom_kills = coalesce(sum_oom_kills, 0)
+// limits_partial: some containers set no limit (or the sum is under the requests) - no limit advice.
+| fieldsAdd limits_partial = (containers_with_limits > 0 and containers_with_limits < containers) or (isNotNull(limits_mib) and isNotNull(requests_mib) and limits_mib < requests_mib)
+// Replicas: the p95 of the hourly pod count. Values above are per pod.
+| fieldsAdd key = concat(k8s.cluster.name, "/", k8s.workload.name)
+| lookup [
+  timeseries pods = sum(dt.kubernetes.pods, rollup: avg), by: { k8s.cluster.name, k8s.workload.name }, from: now()-7d, to: now(), interval: 1h
+  | fields key = concat(k8s.cluster.name, "/", k8s.workload.name), pods = round(arrayPercentile(pods, 95))
+], sourceField: key, lookupField: key, fields: { pods }
+| fieldsAdd excluded = in(k8s.workload.kind, {"pod", "staticpod"})
+// Requests: 120% of the p95 working set rounded up to 16 MiB, at least 64 MiB, where the working set
+// is above the requests (or none are set) or the requests are over 1.5x of it. k8s_rightsizing
+// repeats this rule - keep them in step.
+| fieldsAdd target_request = arrayMax(array(ceil(working_set_mib * 1.2 / 16) * 16, 64))
+| fieldsAdd recommended_request_mib = if(not excluded, coalesce(
+    if(isNull(requests_mib) or working_set_mib > requests_mib, target_request),
+    if(requests_mib > working_set_mib * 1.5 and target_request < requests_mib, target_request)
+  ))
+| fieldsAdd effective_request = coalesce(recommended_request_mib, requests_mib, 0)
+// Limits: OOM kills -> 150% of the larger of the limit, working set and request; none set or the
+// working set within 10% of the limit -> 150% of the larger of working set and request; a raised
+// request above the limit -> 125% of it; no OOM kills and over 2.5x the working set -> 2x the
+// working set, never under the request.
+| fieldsAdd near_limit = not limits_partial and working_set_mib > 0.9 * limits_mib
+| fieldsAdd grown_limit = ceil(arrayMax(array(working_set_mib, effective_request)) * 1.5 / 16) * 16
+| fieldsAdd reduce_limit_to = ceil(arrayMax(array(working_set_mib * 2, effective_request)) / 16) * 16
+| fieldsAdd recommended_limit_mib = if(not excluded and not limits_partial, coalesce(
+    if(sum_oom_kills > 0, ceil(arrayMax(array(coalesce(limits_mib, 0), working_set_mib, effective_request)) * 1.5 / 16) * 16),
+    if(isNull(limits_mib), grown_limit),
+    if(near_limit, grown_limit),
+    if(effective_request > limits_mib, ceil(effective_request * 1.25 / 16) * 16),
+    if(limits_mib > 2.5 * working_set_mib and reduce_limit_to < limits_mib, reduce_limit_to)
+  ))
+| fieldsAdd finding = coalesce(
+    if(k8s.workload.kind == "staticpod", "EXCLUDED_STATIC_POD"),
+    if(k8s.workload.kind == "pod", "EXCLUDED_NO_CONTROLLER"),
+    if(sum_oom_kills > 0, "OOM_KILLS"),
+    if(near_limit, "INCREASE_LIMITS"),
+    if(isNull(limits_mib), "NO_LIMIT_SET"),
+    if(isNull(requests_mib), "NO_REQUESTS_SET"),
+    if(working_set_mib > requests_mib, "INCREASE_REQUESTS"),
+    if(isNotNull(recommended_request_mib), "REDUCE_REQUESTS"),
+    if(recommended_limit_mib < limits_mib, "REDUCE_LIMITS"),
+    "NOMINAL"
+  )
+| sort requests_mib desc
+| summarize by:{finding}, {count_workloads_with_finding = count(), names = collectDistinct(k8s.workload.name, maxLength: 5), examples = collectArray(
+  record(k8s.cluster.name, k8s.workload.name, pods, containers, p95_working_set_mib = working_set_mib, p95_requests_mib = requests_mib, p95_limits_mib = limits_mib, sum_oom_kills, recommended_request_mib, recommended_limit_mib, limits_partial)
+, maxLength:8)}
+// What was left out, by a few of its names.
+| fieldsAdd sample_names = if(in(finding, {"EXCLUDED_NO_CONTROLLER", "EXCLUDED_STATIC_POD"}), names)
+| fieldsAdd examples = if(in(finding, {"NOMINAL", "EXCLUDED_NO_CONTROLLER", "EXCLUDED_STATIC_POD"}), array(), else: examples)
+// One record: the workloads analyzed and left out, then each finding with its examples.
+| summarize { total_workloads = sum(count_workloads_with_finding),
+    analyzed_workloads = sum(if(not in(finding, {"EXCLUDED_NO_CONTROLLER", "EXCLUDED_STATIC_POD"}), count_workloads_with_finding, else: 0)),
+    excluded_workloads = sum(if(in(finding, {"EXCLUDED_NO_CONTROLLER", "EXCLUDED_STATIC_POD"}), count_workloads_with_finding, else: 0)),
+    findings = collectArray(record(finding, count_workloads_with_finding, sample_names, examples)) }

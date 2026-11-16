@@ -1,0 +1,25 @@
+//Kubernetes clusters, memory: hourly averages summed per cluster, then p95 over 7 days. GiB.
+// Figures only - the cluster's finding and node counts are in the CPU query.
+timeseries {
+  allocatable = sum(dt.kubernetes.node.memory_allocatable, rollup: avg),
+  usage = sum(dt.kubernetes.container.memory_working_set, rollup: avg),
+  limits = sum(dt.kubernetes.container.limits_memory, rollup: avg),
+  requests = sum(dt.kubernetes.container.requests_memory, rollup: avg),
+  nodes = avg(dt.kubernetes.nodes)
+}, by: { k8s.cluster.name, k8s.cluster.uid }, from: now()-7d, to: now(), interval: 1h
+| fieldsAdd p95_mem_allocatable_gib = round(arrayPercentile(allocatable, 95) / 1073741824, decimals: 1),
+    p95_mem_usage_gib = round(arrayPercentile(usage, 95) / 1073741824, decimals: 1),
+    p95_mem_limits_gib = round(arrayPercentile(limits, 95) / 1073741824, decimals: 1),
+    p95_mem_requests_gib = round(arrayPercentile(requests, 95) / 1073741824, decimals: 1),
+    avg_node_count = round(arrayAvg(nodes), decimals: 1)
+| fieldsAdd mem_allocatable_per_node_gib = if(avg_node_count > 0, round(p95_mem_allocatable_gib / avg_node_count, decimals: 1))
+| fieldsAdd requests_percent_of_allocatable = round(100 * p95_mem_requests_gib / p95_mem_allocatable_gib),
+    usage_percent_of_allocatable = round(100 * p95_mem_usage_gib / p95_mem_allocatable_gib)
+// The fewest nodes that keep the memory requests at or under 85% of allocatable (the SCALE_UP line),
+// at today's node size: requests / (allocatable per node * 0.85), rounded up. A node count change
+// has to satisfy this for CPU and memory alike.
+// Unrounded, as k8s_cluster_cpu computes it, so the two queries give the same count.
+| fieldsAdd nodes_needed_for_memory = if(avg_node_count > 0, ceil(arrayPercentile(requests, 95) / (arrayPercentile(allocatable, 95) / avg_node_count * 0.85)))
+| sort p95_mem_allocatable_gib desc
+| fields k8s.cluster.name, avg_node_count, p95_mem_allocatable_gib, mem_allocatable_per_node_gib, p95_mem_requests_gib,
+    requests_percent_of_allocatable, p95_mem_usage_gib, usage_percent_of_allocatable, p95_mem_limits_gib, nodes_needed_for_memory

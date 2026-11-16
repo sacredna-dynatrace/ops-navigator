@@ -1,0 +1,14 @@
+//Saturated interfaces: hourly traffic (in + out) against the interface speed, p95 over 7 days >= 85%.
+timeseries {
+    ifcBytesIn = sum(com.dynatrace.extension.network_device.if.bytes_in.count, default: 0),
+    ifcBytesOut = sum(com.dynatrace.extension.network_device.if.bytes_out.count, default: 0)
+  },
+  filter: isNotNull(`dt.entity.network:interface`),
+  by:{ `dt.entity.network:device`, `dt.entity.network:interface`, if.speed}, union:true,
+  from: now()-7d, to: now(), interval: 1h
+  | fieldsAdd ifSpeedBytesPerHour = toDouble(if.speed) * 1000000 / 8 * 3600
+  | fieldsAdd hourlySaturation = (ifcBytesIn[] + ifcBytesOut[]) / ifSpeedBytesPerHour
+  | fieldsAdd ifcSaturation = round(arrayPercentile(hourlySaturation, 95), decimals: 3),
+    p95_traffic_bps = round(arrayPercentile(hourlySaturation, 95) * toDouble(if.speed) * 1000000)
+  | filter ifcSaturation >= 0.85
+  | fields network_area = entityAttr(`dt.entity.network:device`, "extCfgGroupLabel"), device = entityName(`dt.entity.network:device`), interface = entityName(`dt.entity.network:interface`), ifcSaturation, p95_traffic_bps
