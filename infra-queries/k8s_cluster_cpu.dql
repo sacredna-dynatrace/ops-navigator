@@ -1,14 +1,18 @@
 //Kubernetes clusters, CPU: hourly averages summed per cluster, then p95 over 7 days. Millicores.
 // Also the node count both resources allow (memory requests are read here too), so the report
 // does not have to put the two queries together itself.
+// Series without a container name are init containers (the Dynatrace operator's install-oneagent:
+// 30m/100m CPU, 30/60 MiB, no usage). Kubernetes does not add them to the running containers'
+// requests, and here they made mongodb's limits "partly unset" and gave harbor-database a 60 MiB limit
+// that was the init container's (diw85600). They are left out everywhere.
 timeseries {
   allocatable = sum(dt.kubernetes.node.cpu_allocatable, rollup: avg),
-  usage = sum(dt.kubernetes.container.cpu_usage, rollup: avg),
-  limits = sum(dt.kubernetes.container.limits_cpu, rollup: avg),
-  requests = sum(dt.kubernetes.container.requests_cpu, rollup: avg),
+  usage = sum(dt.kubernetes.container.cpu_usage, rollup: avg, filter: isNotNull(k8s.container.name)),
+  limits = sum(dt.kubernetes.container.limits_cpu, rollup: avg, filter: isNotNull(k8s.container.name)),
+  requests = sum(dt.kubernetes.container.requests_cpu, rollup: avg, filter: isNotNull(k8s.container.name)),
   nodes = avg(dt.kubernetes.nodes),
   mem_allocatable = sum(dt.kubernetes.node.memory_allocatable, rollup: avg),
-  mem_requests = sum(dt.kubernetes.container.requests_memory, rollup: avg)
+  mem_requests = sum(dt.kubernetes.container.requests_memory, rollup: avg, filter: isNotNull(k8s.container.name))
 }, by: { k8s.cluster.name, k8s.cluster.uid }, from: now()-7d, to: now(), interval: 1h
 | fieldsAdd p95_cpu_allocatable_mcores = round(arrayPercentile(allocatable, 95)),
     p95_cpu_usage_mcores = round(arrayPercentile(usage, 95)),

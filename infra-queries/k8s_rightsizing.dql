@@ -1,11 +1,15 @@
 //Kubernetes clusters after pod rightsizing: the requests once every recommended request is applied to
 // every replica, and the nodes they need. The request rules repeat k8s_workload_cpu and
 // k8s_workload_memory - keep them in step. An estimate: the change is added to the cluster's p95 requests.
+// Series without a container name are init containers (the Dynatrace operator's install-oneagent:
+// 30m/100m CPU, 30/60 MiB, no usage). Kubernetes does not add them to the running containers'
+// requests, and here they made mongodb's limits "partly unset" and gave harbor-database a 60 MiB limit
+// that was the init container's (diw85600). They are left out everywhere.
 timeseries {
   cpu_allocatable = sum(dt.kubernetes.node.cpu_allocatable, rollup: avg),
-  cpu_requests = sum(dt.kubernetes.container.requests_cpu, rollup: avg),
+  cpu_requests = sum(dt.kubernetes.container.requests_cpu, rollup: avg, filter: isNotNull(k8s.container.name)),
   mem_allocatable = sum(dt.kubernetes.node.memory_allocatable, rollup: avg),
-  mem_requests = sum(dt.kubernetes.container.requests_memory, rollup: avg),
+  mem_requests = sum(dt.kubernetes.container.requests_memory, rollup: avg, filter: isNotNull(k8s.container.name)),
   nodes = avg(dt.kubernetes.nodes)
 }, by: { k8s.cluster.name }, from: now()-7d, to: now(), interval: 1h
 | fieldsAdd avg_node_count = round(arrayAvg(nodes), decimals: 1),
@@ -19,7 +23,7 @@ timeseries {
   timeseries {
     use = percentile(dt.kubernetes.container.cpu_usage, 95, rollup:max, scalar: true),
     req = percentile(dt.kubernetes.container.requests_cpu, 95, rollup:max, scalar: true)
-  }, union: TRUE, by: { k8s.cluster.name, k8s.workload.name, k8s.workload.kind, k8s.container.name }, from: now()-7d, to: now()
+  }, union: TRUE, by: { k8s.cluster.name, k8s.workload.name, k8s.workload.kind, k8s.container.name }, filter: isNotNull(k8s.container.name), from: now()-7d, to: now()
   | fieldsAdd req = if(req > 0, req)
   | summarize by:{ k8s.cluster.name, k8s.workload.name, k8s.workload.kind }, { with_req = countIf(isNotNull(req)), sum_req = sum(req), use = round(sum(use)) }
   | fieldsAdd req = if(with_req > 0, round(sum_req))
@@ -42,7 +46,7 @@ timeseries {
   timeseries {
     req = percentile(dt.kubernetes.container.requests_memory, 95, rollup: max, scalar: true),
     ws = percentile(dt.kubernetes.container.memory_working_set, 95, rollup: max, scalar: true)
-  }, union: TRUE, by: { k8s.cluster.name, k8s.workload.name, k8s.workload.kind, k8s.container.name }, from: now()-7d, to: now()
+  }, union: TRUE, by: { k8s.cluster.name, k8s.workload.name, k8s.workload.kind, k8s.container.name }, filter: isNotNull(k8s.container.name), from: now()-7d, to: now()
   | fieldsAdd req = if(req > 0, req)
   | summarize by:{ k8s.cluster.name, k8s.workload.name, k8s.workload.kind }, { with_req = countIf(isNotNull(req)), sum_req = sum(req), working_set_mib = round(sum(ws) / 1048576) }
   | fieldsAdd requests_mib = if(with_req > 0, round(sum_req / 1048576))

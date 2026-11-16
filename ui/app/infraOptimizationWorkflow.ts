@@ -21,6 +21,10 @@ import { answerLanguageLine } from "./problemAnalysis";
  */
 
 /**
+ * v21: container series without a container name (init containers - the Dynatrace operator's
+ * install-oneagent) are left out of every Kubernetes query: they hid unset requests and limits and
+ * made limits look partly set. The key actions keep the page-cache caveat for a working set at its
+ * limit, and the partly-set-limits note says which resource.
  * v20: the scripts write the reports (infraReportText.ts) - each finding's meaning and change as a
  * fixed sentence under its table, and each domain's overview, node counts and priorities from the
  * records. The four per-domain AI reports are gone: every run brought a new kind of mistake in them
@@ -81,7 +85,7 @@ import { answerLanguageLine } from "./problemAnalysis";
  * to the trash (CLEANUP_TASK).
  * v2: the notebook's title names the domains it covers, and it gets a description.
  */
-export const INFRA_TEMPLATE_VERSION = 20;
+export const INFRA_TEMPLATE_VERSION = 21;
 export const INFRA_WORKFLOW_TITLE = "[Ops Navigator] Infrastructure Optimization";
 /** Finds every version, v1-v2 titled like Dynatrace's template included; the marker decides. */
 export const INFRA_WORKFLOW_SEARCH = "Infrastructure Optimization";
@@ -439,7 +443,7 @@ Write the key actions: 3 to 5 bullet points chosen from the candidates, keeping 
 const SUMMARY_INSTRUCTION = [
   "Start directly with the first bullet - no title, no introduction and no closing line.",
   "Use only the candidates: no other facts, causes or advice, no number of your own, never add numbers up, and never move a number from one item to another. Keep each value with its unit as written; the throttling indicator has no unit.",
-  "Keep the candidate's own words for what a finding means. Never write money amounts, prices or saving percentages.",
+  "Keep any caveat a candidate gives (after its last dash) in the bullet. Keep the candidate's own words for what a finding means. Never write money amounts, prices or saving percentages.",
   "A candidate that counts workloads across all clusters names no cluster: never give it one, and call them workloads, not pods.",
 ].join("\n");
 

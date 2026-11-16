@@ -103,6 +103,14 @@ DaemonSet on 4 nodes otherwise counts once - 49% of a cluster's CPU requests rea
 their 30-day percentiles. Check for data in the last 24 h (a `lookup` on a 24 h `timeseries`) before
 advising on a host or its disks - diw85600 had 6 of 8 GKE node hosts gone, one at 100% CPU.
 
+**Container series without `k8s.container.name` are init containers.** They carry requests and
+limits but never usage - the Dynatrace operator's install-oneagent at 30m/100m CPU and 30/60 MiB.
+Kubernetes does not add init containers to the running containers' requests, so summing them hid
+unset requests and limits (diw85600: 20 workloads read as having CPU requests that only the init
+container had) and gave harbor-database a 60 MiB "limit". Leave them out with
+`filter: isNotNull(k8s.container.name)` - on the `timeseries` command when it reads container metrics
+only, or on each container metric (`sum(..., filter: ...)`) when node metrics share the block.
+
 **A multi-metric `timeseries { }` block intersects.** An entity missing any one metric drops out of
 the result entirely rather than returning null for it. A pod with no CPU limit disappeared from pod
 utilization until requests/limits were moved into separate `lookup`s. `nonempty: true` is accepted

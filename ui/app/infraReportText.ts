@@ -251,19 +251,24 @@ const writeKubernetes = (byName, language, titles) => {
   if (nodeChange) priorities.push(ko ? "노드 수: Pod 크기를 조정한 뒤 위 클러스터별 최소 노드 수에 맞춰 조정하세요." : "Nodes: once the pods are resized, adjust each cluster to its minimum above.");
 
   // Notes that apply to items in the data: partly unset limits, and working sets at the limit.
-  const partial = [];
+  // Per resource: one list for both read as a contradiction - mongodb's CPU limit was partial while
+  // its memory limit got advice (diw85600).
+  const partial = { cpu: [], memory: [] };
   const atLimit = [];
   for (const kind of ["cpu", "memory"]) {
     for (const group of findingsOf(byName[queryOfKind(kind)])) {
       for (const row of examplesFor(group)) {
-        if (row.limits_partial === true && !partial.includes(workloadName(row))) partial.push(workloadName(row));
+        if (row.limits_partial === true && !partial[kind].includes(workloadName(row))) partial[kind].push(workloadName(row));
         const used = num(row.p95_working_set_mib);
         const limit = num(row.p95_limits_mib);
         if (kind === "memory" && row.limits_partial !== true && used !== null && limit !== null && limit > 0 && used >= limit * 0.99 && !atLimit.includes(workloadName(row))) atLimit.push(workloadName(row));
       }
     }
   }
-  if (partial.length > 0) notes.push(ko ? "- 일부 컨테이너에만 제한이 있어 제한은 판단하지 않은 워크로드: " + someNames(partial, partial.length, language) : "- " + someNames(partial, partial.length, language) + ": only some containers set a limit, so the limit is not judged.");
+  for (const kind of ["cpu", "memory"]) {
+    const names = partial[kind];
+    if (names.length > 0) notes.push(ko ? "- 일부 컨테이너에만 " + resourceWord(kind, language) + " 제한이 있어 " + resourceWord(kind, language) + " 제한은 판단하지 않은 워크로드: " + someNames(names, names.length, language) : "- " + someNames(names, names.length, language) + ": only some containers set a " + resourceWord(kind, language) + " limit, so that limit is not judged.");
+  }
   if (atLimit.length > 0) notes.push(ko ? "- 작업 세트가 메모리 제한과 거의 같은 워크로드: " + someNames(atLimit, atLimit.length, language) + ". 페이지 캐시가 제한까지 찬 것일 수 있으니, 제한을 올리기 전에 실제 필요량을 확인하세요." : "- " + someNames(atLimit, atLimit.length, language) + ": the working set is almost at the memory limit. That can be page cache filling up to it, so check the actual need before raising the limit.");
   return { overview, priorities, notes };
 };
@@ -393,7 +398,10 @@ const rankActions = (byName, language, scope) => {
     }
   }
   for (const row of examplesFor(workloadGroup("memory", "INCREASE_LIMITS")).slice().sort(byDescending((row) => num(row.p95_working_set_mib) / (num(row.p95_limits_mib) || 1))).slice(0, 2)) {
-    risks.push(tag("kubernetes") + workloadName(row) + (ko ? " - 메모리 작업 세트 " + fmt(row.p95_working_set_mib) + " / 제한 " + fmt(row.p95_limits_mib) + " MiB: " : " - memory working set " + fmt(row.p95_working_set_mib) + " of a " + fmt(row.p95_limits_mib) + " MiB limit: ") + memoryChange(row, language) + perPod(row, language));
+    // At the limit, the caveat goes with the advice: the key actions dropped it (rad60188, fluent-bit).
+    const full = num(row.p95_limits_mib) > 0 && num(row.p95_working_set_mib) >= num(row.p95_limits_mib) * 0.99;
+    const caveat = full ? (ko ? " - 작업 세트가 제한과 거의 같아 페이지 캐시일 수 있으니 올리기 전에 실제 필요량 확인" : " - the working set is almost at the limit and can be page cache, so check the actual need before raising it") : "";
+    risks.push(tag("kubernetes") + workloadName(row) + (ko ? " - 메모리 작업 세트 " + fmt(row.p95_working_set_mib) + " / 제한 " + fmt(row.p95_limits_mib) + " MiB: " : " - memory working set " + fmt(row.p95_working_set_mib) + " of a " + fmt(row.p95_limits_mib) + " MiB limit: ") + memoryChange(row, language) + perPod(row, language) + caveat);
   }
   for (const row of examplesFor(workloadGroup("cpu", "INCREASE_LIMITS")).slice().sort(byDescending((row) => num(row.throttling_p95))).slice(0, 2)) {
     risks.push(tag("kubernetes") + workloadName(row) + (ko ? " - CPU 사용량 " + fmt(row.p95_cpu_usage_mcores) + " / 제한 " + fmt(row.p95_cpu_limits_mcores) + " mcores, 스로틀링 지표 " + fmt(row.throttling_p95) + ": " : " - CPU use " + fmt(row.p95_cpu_usage_mcores) + " of a " + fmt(row.p95_cpu_limits_mcores) + " mcores limit, throttling indicator " + fmt(row.throttling_p95) + ": ") + cpuChange(row, language) + perPod(row, language));
