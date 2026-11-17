@@ -2,13 +2,14 @@
 
 > 이전 이름은 Overview Dashboard(앱 id `my.overview.dashboard`)입니다. 0.0.149부터 앱 id가 `my.ops.navigator`로 바뀌어 새 앱으로 설치됩니다.
 
-Dynatrace AppEngine 앱입니다. 세 페이지로 구성됩니다.
+Dynatrace AppEngine 앱입니다. 네 페이지로 구성됩니다.
 
 | 페이지 | 경로 | 하는 일 |
 | --- | --- | --- |
 | **Blast radius** | `/blast-radius` (첫 화면) | Davis 문제 하나를 근본 원인 중심의 고리로 그려 영향 범위를 보여 줌 |
 | **Topology** | `/topology` | RUM 애플리케이션 → 서비스 → Kubernetes 워크로드 / 프로세스 그룹 → 인프라의 트래픽 맵 |
 | **Starfield** | `/starfield` | 요청 하나하나를 별로 찍은 응답시간 산점도. 영역을 드래그해 트레이스를 엶 |
+| **Automation** | `/automation` | 운영에 바로 쓸 workflow를 이 환경에 만듦. 지금은 인프라 최적화 리포트 하나 |
 
 쿼리를 고치기 전에 [docs/dynatrace-query-notes.md](docs/dynatrace-query-notes.md)를 먼저 읽어 주세요.
 에러 없이 틀린 숫자를 내는 플랫폼 동작과, 각 설계 결정의 근거(실측 수치 포함)가 정리되어 있습니다.
@@ -21,7 +22,7 @@ Dynatrace AppEngine 앱입니다. 세 페이지로 구성됩니다.
 
 ## 공통: 세그먼트와 태그 필터
 
-세 페이지 모두 상단에 세그먼트 선택과 서비스 태그 필터가 있습니다. 한 페이지에서 고른 값은 다른 페이지로
+Blast radius, Topology, Starfield 세 페이지는 상단에 세그먼트 선택과 서비스 태그 필터가 있습니다. 한 페이지에서 고른 값은 다른 페이지로
 옮겨 가도 유지됩니다. 새로 고침하면 초기화됩니다.
 
 - 태그는 여러 개를 고르면 **OR**로 묶입니다. 하나라도 가진 서비스가 대상입니다.
@@ -187,6 +188,112 @@ Davis 문제를 하나 고르면 근본 원인을 가운데 두고, 그것에 �
 - list price 기준이라 실제 금액은 계약 단가에 따라 다릅니다. `@dynatrace.com` 계정의 조회에는 billing 이벤트가 없었고,
   고객 계정의 과금은 아직 확인하지 못했습니다. 위 금액은 고객 계정이면 과금된다고 보고 계산했습니다.
 
+## Automation
+
+![Automation 화면: Infrastructure Optimization 카드. 이 환경에 만들어진 workflow의 상태(Draft, Private, 템플릿 v22), 저장된 설정, 마지막 실행 결과와 최근 리포트 링크](docs/images/automation.png)
+
+운영에 바로 쓸 수 있는 Dynatrace workflow를 이 환경에 만드는 페이지입니다. 지금은 **[Ops Navigator] Infrastructure
+Optimization** 카드 하나가 있습니다. Kubernetes, 호스트, 디스크, 네트워크 사용률을 조회해 비용을 줄이고 위험을
+낮추는 최적화 리포트를 만들고, Dynatrace 생성형 AI가 핵심 조치를 요약합니다. Dynatrace의 Infrastructure
+Optimization Agent 템플릿을 바탕으로 쿼리와 리포트를 고친 것입니다.
+
+카드에는 이 환경에 이미 만들어진 workflow가 보입니다. 상태(Draft/Deploy, Private), 템플릿 버전, 저장된 설정,
+마지막 실행 결과, 최근 리포트(노트북) 링크가 함께 나옵니다. 템플릿이 새 버전이면 **v<N>로 다시 만들기**가 나타납니다.
+
+### 만드는 법
+
+1. **분석 범위**를 고릅니다. 페이지가 영역마다 최근 하루 데이터가 있는지 미리 확인합니다. 데이터가 없는 영역은
+   경고가 표시되고, 고르면 리포트에 "수집하지 못함"으로 나옵니다. 네트워크는 네트워크 장비 extension이 있어야 합니다.
+2. **결과 전달**을 하나 이상 고릅니다.
+   - **이메일:** 모든 리포트를 묶은 메일 한 통을 보냅니다. 제목 앞에 tenant ID가 붙습니다.
+   - **노트북:** 모든 리포트와 원본 데이터 쿼리를 담은 노트북 하나를 만듭니다.
+   - 둘 다 고르면 노트북을 먼저 만들고, 메일 맨 위에 그 링크를 넣습니다.
+3. 이메일이면 받는 사람(To, CC, BCC)을 넣고, **리포트 언어**(한국어/영어)를 고릅니다.
+4. **워크플로 만들기**를 누르면 Workflows 앱이 새 탭에서 정의가 채워진 상태로 열립니다. 거기서 저장합니다.
+
+### 만든 뒤 할 일
+
+- 저장하면 만든 사람의 권한으로 실행되는 **Private** workflow가 됩니다. 공유하려면 Workflows 앱에서 Public으로 바꾸세요.
+- 저장한 workflow는 **Draft**입니다. Draft에서는 스케줄 트리거가 동작하지 않습니다. **Run**으로 한 번 시험해 본 뒤
+  트리거를 일간·주간 스케줄로 바꾸고 **Deploy**하세요.
+- 첫 실행 때 이 앱이 만든 **이전 버전** workflow를 휴지통(Trash)으로 옮깁니다. 30일 안에는 복원할 수 있습니다.
+  Dynatrace 원본 템플릿과, 같은 버전으로 더 만든 workflow는 그대로 둡니다.
+- 범위, 전달 방식, 언어, 수신자는 workflow의 **Input**(`scope`, `delivery`, `language`, `emails`)에 들어 있습니다.
+  다시 만들지 않고 Input만 바꿔도 됩니다.
+- Authorization settings를 **맞춤 선택**으로 제한했다면 다음 권한을 허용하세요.
+  `storage:buckets:read`, `storage:metrics:read`, `storage:entities:read`, `storage:smartscape:read`,
+  `davis-copilot:conversations:execute`, `email:emails:send`, `document:documents:write`,
+  `automation:workflows:read`, `automation:workflows:write`
+
+### 동작 방식
+
+![Workflow 구성: 쿼리 10개가 동시에 실행되고, rank_actions, summary_prompt, publish_notebook, compose_email, email_report 순으로 이어짐](docs/images/automation-workflow.png)
+
+```text
+쿼리 10개 (동시에 실행)
+  → rank_actions      쿼리 결과로 조치 후보를 우선순위대로 만듦 (위험 먼저, 다음은 절감)
+  → summary_prompt    AI가 후보 중 3~5개를 골라 핵심 요약으로 씀
+  → publish_notebook  리포트와 표를 쿼리 결과로 만들어 노트북으로 저장
+  → compose_email     같은 내용으로 메일 본문 작성 → email_report로 보냄
+```
+
+- **리포트 본문과 표는 쿼리 결과로 만듭니다.** 개요, 클러스터별 노드 수, 우선순위, 참고 문구와 데이터 표, 각 판정
+  유형의 의미 설명은 고정 문장에 쿼리 값을 넣은 것입니다. 실행할 때마다 같은 기준과 같은 표현으로 나옵니다.
+- **AI는 핵심 요약만 씁니다.** `rank_actions`가 숫자까지 넣어 만든 후보 목록에서만 고르고, 원본 데이터는 받지
+  않습니다. AI 단계가 실패해도 리포트는 나오며, 이때는 후보를 영역마다 하나씩 그대로 보여 줍니다.
+- 쿼리 하나가 실패해도 나머지 리포트는 나오고, 실패한 부분은 "데이터를 가져오지 못했습니다"로 표시됩니다.
+- 실행 한 번에 AI 호출은 1회입니다. 쿼리는 메트릭과 엔티티만 읽고 raw span이나 로그는 읽지 않습니다.
+  diw85600 기준으로 실행 시간은 약 25초입니다.
+
+### 분석 기준
+
+| 영역 | 데이터 | 기준 |
+| --- | --- | --- |
+| Kubernetes 클러스터 | 7일, 시간별 합계의 p95 | 필요 노드 수 = 요청 합계 ÷ (노드당 할당 가능량 × 0.85), 올림. CPU와 메모리 중 큰 쪽이 최소 노드 수입니다. 사용량으로는 정하지 않습니다. 최소보다 노드가 많으면 축소 가능, 적으면 확장 필요 |
+| Kubernetes 워크로드 | 7일 p95, Pod 하나 기준(컨테이너 합계) | 아래 표 참고. 컨트롤러가 없는 Pod와 정적 Pod는 권고하지 않습니다 |
+| Pod 최적화 후 | 위 권장 요청 × 레플리카 수 | 분석한 워크로드의 요청을 모두 권장값으로 바꿨을 때의 요청 합계와 노드 수 |
+| 호스트 | 30일 p90 | 미사용 추정: CPU < 10%, 메모리 < 30%. 과다 프로비저닝: CPU < 30%, 메모리 < 50%. 과소 프로비저닝: CPU > 80%, 메모리 < 85%. Kubernetes 노드는 클러스터 단위로 판단합니다. 최근 24시간 데이터가 없는 호스트는 교체·종료된 것으로 보고 권고하지 않습니다 |
+| 디스크 | 30일, 50 GiB 이상, 최근 24시간 데이터가 있는 호스트 | 과다 사용: 최대 사용률 > 95%. 과소 사용: 최대 사용률 < 50%. 권장 크기 = 30일 최대 사용량 × 1.3(10 GiB 단위 올림, 최소 20 GiB). 마운트와 크기가 같은 디스크는 한 그룹으로 묶음. 컨테이너 파일시스템(overlay, kubelet·containerd 볼륨)은 제외 |
+| 네트워크 | 포화: 7일 p95. Up/Down: 현재 상태 | 포화: 트래픽이 인터페이스 속도의 85% 이상. Up/Down: 관리 상태 up, 동작 상태 down |
+
+워크로드의 판정 유형과 권장값입니다. 요청과 제한은 서로 따로 권고합니다. 워크로드마다 가장 급한 유형 하나를
+표시하지만, 권장 요청과 권장 제한은 둘 다 보여 줍니다.
+
+| 유형 | CPU | 메모리 |
+| --- | --- | --- |
+| OOMKill 발생 | - | OOMKill이 있음 → 제한 = max(제한, 작업 세트, 요청) × 1.5 |
+| 제한 증가 필요 | 스로틀링이 있고 사용량 > 제한의 90% → 제한 = max(사용량, 요청) × 1.5 | 작업 세트 > 제한의 90% → 제한 = max(작업 세트, 요청) × 1.5 |
+| 제한 미설정 | - | 제한 없음 → 제한 = max(작업 세트, 요청) × 1.5 |
+| 요청 미설정 / 요청 증가 필요 | 요청 없음 또는 사용량 > 요청 → 요청 = 사용량 × 1.2 (최소 50 mcores) | 요청 없음 또는 작업 세트 > 요청 → 요청 = 작업 세트 × 1.2 (최소 64 MiB) |
+| 요청 감소 가능 | 요청 > 사용량 × 2 → 요청 = 사용량 × 1.2 | 요청 > 작업 세트 × 1.5 → 요청 = 작업 세트 × 1.2 |
+| 제한 감소 가능 | 스로틀링 없고 제한 > 사용량 × 3 → 제한 = max(사용량 × 2, 요청, 100 mcores). 선택 사항 | 제한 > 작업 세트 × 2.5 → 제한 = max(작업 세트 × 2, 요청). 메모리 오버커밋을 줄임 |
+
+- 제한 공식의 "요청"은 권장 요청이 있으면 그 값, 없으면 현재 요청입니다. 권장값은 CPU는 10 mcores, 메모리는 16 MiB 단위로 올림합니다.
+- 스로틀링은 CPU 제한에서만 생기고, CPU 때문에 축출되지는 않습니다. 요청과 제한이 같은 설정(Guaranteed QoS)은
+  문제로 보지 않습니다.
+- 일부 컨테이너에만 제한이 있는 Pod는 제한을 판단하지 않습니다. 이름 없는 컨테이너 시계열(init 컨테이너)은 계산에서 뺍니다.
+- 각 판정 유형의 의미 문장은 [ui/app/infraReportText.ts](ui/app/infraReportText.ts)의 `MEANINGS`에 있습니다.
+
+### 리포트 읽는 법
+
+- **값은 Pod 하나 기준입니다.** 워크로드 표의 사용량, 요청, 제한, 권장값은 모두 레플리카 하나(컨테이너 합계)의
+  값이고, Pod 수는 따로 표시합니다. 권장값 칸의 **유지**는 현재 설정을 그대로 두라는 뜻입니다.
+- **⚠ 데이터 점검:** 쿼리 결과끼리 맞지 않는 값이 있을 때 표 위에 나옵니다. 예를 들어 권장 방향이 유형과 반대이거나,
+  개수 합계가 맞지 않거나, 두 쿼리의 노드 수가 다를 때입니다. 쿼리 오류일 수 있으니 조치 전에 원본 데이터를 확인하세요.
+- **⚠ 숫자 검사:** 핵심 요약에 쓰인 숫자가 데이터에 없으면 그 숫자에 표시하고 목록으로 보여 줍니다. AI가
+  계산하거나 옮겨 적다 틀린 값일 수 있으니 표의 값으로 확인하세요.
+- 금액은 쓰지 않습니다. 절감은 줄일 수 있는 노드 수, 회수 가능한 GiB, 권장 요청·제한으로만 표시합니다.
+
+### 템플릿을 고칠 때
+
+- 쿼리는 [infra-queries/](infra-queries/)에 파일 하나씩 있습니다. 고친 뒤 `npm run gen:infra-queries`로
+  [ui/app/infraOptimizationQueries.ts](ui/app/infraOptimizationQueries.ts)를 다시 만드세요. 이 파일은 직접 고치지 않습니다.
+- push 전에는 `npm run test:infra -- --live <dtctl context>`를 쓸 수 있는 tenant마다 실행하세요. 각 tenant의 쿼리
+  결과를 저장해(`infra-tests/fixtures/`, git 제외) 데이터 점검, 두 언어의 리포트 렌더링, 합성 데이터 세트,
+  과거 숫자 오류 사례를 확인합니다.
+- 템플릿 버전은 [ui/app/infraOptimizationWorkflow.ts](ui/app/infraOptimizationWorkflow.ts)의
+  `INFRA_TEMPLATE_VERSION`입니다. 버전마다 바뀐 내용이 그 위 주석에 있습니다. 작업 규칙은 [AGENTS.md](AGENTS.md)를 보세요.
+
 ## 시작하기
 
 Node.js 20.19 이상이 필요합니다.
@@ -228,7 +335,12 @@ npm run deploy
 | `storage:spans:read` | Starfield의 root span 조회 |
 | `storage:filter-segments:read` | 세그먼트 목록과 적용 |
 | `davis:analyzers:execute` | 상세 패널의 Davis 예측 |
+| `automation:workflows:read` | Blast radius와 Automation 페이지가 이 앱이 만든 workflow와 그 실행 기록을 찾음. 없어도 페이지는 동작하지만 상태를 보여 주지 못함 |
+| `storage:events:write` | Blast radius의 **SRE agent로 분석**이 on demand workflow를 실행하는 비즈니스 이벤트를 보냄 |
 | `storage:user.events:read` | 선언만 되어 있음. 현재 user event를 읽는 쿼리는 없음 |
+
+Automation 페이지가 만든 workflow는 앱이 아니라 **workflow를 만든 사람의 권한**으로 실행됩니다. 그 권한은 위
+[만든 뒤 할 일](#만든-뒤-할-일)에 있습니다.
 
 ## 커밋하면 안 되는 것
 
