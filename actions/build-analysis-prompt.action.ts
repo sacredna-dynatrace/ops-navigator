@@ -1,7 +1,7 @@
 import { getEnvironmentUrl } from "@dynatrace-sdk/app-environment";
 import { userLogger } from "@dynatrace-sdk/automation-action-utils/actions";
 import { queryExecutionClient } from "@dynatrace-sdk/client-query";
-import { DISPLAY_ID, explainPrompt, logScopeOf, problemFactsQuery, problemFromRecord, scopeServiceIds, serviceHostsQuery, strings, text } from "../ui/app/problemAnalysis";
+import { DISPLAY_ID, errorLogsQuery, explainPrompt, logScopeOf, problemFactsQuery, problemFromRecord, scopeServiceIds, serviceHostsQuery, strings, text } from "../ui/app/problemAnalysis";
 
 /**
  * Builds the Blast radius page's "Analyze problem" prompt for one Davis problem, for an AI task in a
@@ -83,6 +83,9 @@ export default async (payload: ActionInput) => {
     origin: problem.origin,
     rootId: problem.rootId,
     affectedCount: problem.affected.length,
+    // For the GitHub issue workflow, which runs it and puts the stack traces in the issue. Not run here:
+    // the Analyze Problem workflows do not need it.
+    errorLogsQuery: errorLogsQuery(problem, scope),
     promptLength: prompt.length,
   };
 };

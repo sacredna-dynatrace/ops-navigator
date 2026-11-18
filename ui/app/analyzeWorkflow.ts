@@ -37,7 +37,8 @@ const MARKER_PATTERN = /ops-navigator analyze-problem template v(\d+)/;
 
 // Scripts run in the workflow's JavaScript runtime. They avoid template literals so this file can
 // hold them in plain strings.
-const resolveScript = (kind: WorkflowKind) => `// ${MARKER(kind)}
+/** The first task's script, under a marker that tells which template a saved workflow came from. */
+export const problemResolveScript = (marker: string) => `// ${marker}
 import { executionsClient } from "@dynatrace-sdk/client-automation";
 
 // The problem to analyze: a Davis event (auto), the page's business event (on demand, problem_id
@@ -53,6 +54,7 @@ export default async function ({ execution_id }) {
   return { displayId };
 }
 `;
+const resolveScript = (kind: WorkflowKind) => problemResolveScript(MARKER(kind));
 
 /**
  * Platform text an agent run returns when it hits a ceiling. The task still reports SUCCESS with this
@@ -97,12 +99,12 @@ export const cleanReport = (text: string): string => {
   return kept.join("\n");
 };
 
-// String.raw keeps the regular expressions' backslashes as written; \x60 is a backtick.
-const CLEAN_SCRIPT = String.raw`import { executionsClient } from "@dynatrace-sdk/client-automation";
-
-// The agent's report without its lead-in sentence, with service and host ids turned into links - the
-// same rules as cleanReport and linkifyEntities in the app.
-const ROUTES = {
+/**
+ * `clean` and `linkify` for workflow scripts: the same rules as cleanReport and linkifyEntities in the
+ * app. Shared by this template's clean_report task and the GitHub issue template.
+ * String.raw keeps the regular expressions' backslashes as written; \x60 is a backtick.
+ */
+export const REPORT_HELPERS_JS = String.raw`const ROUTES = {
   "SERVICE-": ["/ui/apps/dynatrace.services/explorer/services", "perspective=performance", "detailsId="],
   "HOST-": ["/ui/apps/dynatrace.infraops/explorer/Compute/Hosts", "perspective=Health", "fullPageId="],
 };
@@ -132,7 +134,13 @@ const linkify = (text, environmentUrl) => {
     const code = /^\x60((?:SERVICE|HOST)-[0-9A-F]{16})\x60$/.exec(part);
     return code ? "[" + part + "](" + link(code[1]) + ")" : part;
   }).join("");
-};
+};`;
+
+const CLEAN_SCRIPT = String.raw`import { executionsClient } from "@dynatrace-sdk/client-automation";
+
+// The agent's report without its lead-in sentence, with service and host ids turned into links - the
+// same rules as cleanReport and linkifyEntities in the app.
+${REPORT_HELPERS_JS}
 
 export default async function ({ execution_id }) {
   const task = await executionsClient.getTaskExecution({ executionId: execution_id, id: "${AGENT_TASK}" });
@@ -152,7 +160,7 @@ const AGENT_TEXT = `(result("${AGENT_TASK}")["text"] | default(""))`;
 const HAS_ANSWER = `(${AGENT_TEXT} | trim | length) > 0 and not (${LIMIT_MESSAGES.map((message) => `"${message}" in ${AGENT_TEXT}`).join(" or ")})`;
 
 /** Budget for the SRE agent only (run-agent's supplementary input). */
-const AGENT_BUDGET = [
+export const AGENT_BUDGET = [
   "Hard budget: at most 12 tool calls in total. The run is cut off at its step limit and then returns nothing usable, so after about 10 calls stop investigating and write the complete report with what you have; an open verdict is better than no report.",
   // v4: the P-2611383 report opened with "이제 수집된 모든 데이터를 바탕으로 최종 보고서를 작성하겠습니다."
   "Start the answer directly with the Verdict heading: no planning, progress or transition sentence anywhere in it.",

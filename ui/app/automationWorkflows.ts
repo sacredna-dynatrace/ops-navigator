@@ -14,6 +14,17 @@ import {
   type InfraDomain,
   type InfraOptimizationInput,
 } from "./infraOptimizationWorkflow";
+import {
+  CHECK_TASK,
+  GITHUB_MARKER_PATTERN,
+  GITHUB_TEMPLATE_VERSION,
+  GITHUB_WORKFLOW_SEARCH,
+  ISSUE_TASK,
+  RESOLVE_TASK,
+  githubIssueWorkflow,
+  summarizeGithubTasks,
+  type GithubIssueInput,
+} from "./githubIssueWorkflow";
 
 /**
  * The Automation page's workflows. Like the Analyze Problem ones (analyzeWorkflow.ts) the app cannot
@@ -27,12 +38,17 @@ import {
 export const createInfraWorkflowLink = (input: InfraOptimizationInput) =>
   getIntentLink(infraOptimizationWorkflow(input), "dynatrace.automations", "create-workflow");
 
+/** The same, for the Problem → GitHub Issue workflow. */
+export const createGithubWorkflowLink = (input: GithubIssueInput) =>
+  getIntentLink(githubIssueWorkflow(input), "dynatrace.automations", "create-workflow");
+
 const base = () => getEnvironmentUrl().replace(/\/$/, "");
 /** A run in the Workflows app. */
 export const executionLink = (id: string) => `${base()}/ui/apps/dynatrace.automations/executions/${encodeURIComponent(id)}`;
 
 /** `cleaned`: older versions the run moved to the trash; `cleanupFailed`: ones it could not. */
-export type LastRun = { id: string; state: string; startedAt: string | null; notebookUrl: string | null; cleaned: number; cleanupFailed: number };
+/** `issueUrl`: the issue the run filed, or found already filed (GitHub workflow only). */
+export type LastRun = { id: string; state: string; startedAt: string | null; notebookUrl: string | null; issueUrl: string | null; cleaned: number; cleanupFailed: number };
 
 export type CreatedWorkflow = {
   id: string;
@@ -69,6 +85,7 @@ const lastRunOf = async (last: { id: string; state: string; startedAt?: Date }):
     state: last.state,
     startedAt: last.startedAt ? new Date(last.startedAt).toISOString() : null,
     notebookUrl: typeof notebook?.url === "string" ? notebook.url : null,
+    issueUrl: null,
     cleaned: count(cleanup?.deleted),
     cleanupFailed: count(cleanup?.failed),
   };
@@ -100,6 +117,47 @@ export const findInfraWorkflows = async (): Promise<CreatedWorkflow[]> => {
       triggerType: full.triggerType,
       settings: summarizeInfraInput(full.input),
       lastRun: last ? await lastRunOf(last) : null,
+    });
+  }
+  return found.sort((a, b) => b.version - a.version);
+};
+
+const issueRunOf = async (last: { id: string; state: string; startedAt?: Date }): Promise<LastRun> => {
+  const [issue, check] = await Promise.all([taskResult(last.id, ISSUE_TASK), taskResult(last.id, CHECK_TASK)]);
+  const filed = (issue?.issue as { html_url?: unknown } | undefined)?.html_url;
+  const existing = check?.existing;
+  return {
+    id: last.id,
+    state: last.state,
+    startedAt: last.startedAt ? new Date(last.startedAt).toISOString() : null,
+    notebookUrl: null,
+    issueUrl: typeof filed === "string" ? filed : typeof existing === "string" ? existing : null,
+    cleaned: 0,
+    cleanupFailed: 0,
+  };
+};
+
+/** The Problem → GitHub Issue workflows this app made, by the marker in resolve_problem; newest template first. */
+export const findGithubWorkflows = async (): Promise<CreatedWorkflow[]> => {
+  const list = await workflowsClient.getWorkflows({ search: GITHUB_WORKFLOW_SEARCH, limit: 50 });
+  const found: CreatedWorkflow[] = [];
+  for (const workflow of list.results) {
+    const full = await workflowsClient.getWorkflow({ id: workflow.id });
+    const script = (full.tasks?.[RESOLVE_TASK]?.input as { script?: string } | undefined)?.script ?? "";
+    const match = GITHUB_MARKER_PATTERN.exec(script);
+    if (!match) continue;
+    const version = Number(match[1]);
+    const last = full.lastExecution;
+    found.push({
+      id: full.id,
+      title: full.title,
+      version,
+      outdated: version < GITHUB_TEMPLATE_VERSION,
+      isPrivate: full.isPrivate === true,
+      deployed: full.isDeployed === true,
+      triggerType: full.triggerType,
+      settings: summarizeGithubTasks(full.tasks as Record<string, { input?: unknown }> | undefined),
+      lastRun: last ? await issueRunOf(last) : null,
     });
   }
   return found.sort((a, b) => b.version - a.version);

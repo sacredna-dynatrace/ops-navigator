@@ -9,7 +9,7 @@ Dynatrace AppEngine 앱입니다. 네 페이지로 구성됩니다.
 | **Blast radius** | `/blast-radius` (첫 화면) | Davis 문제 하나를 근본 원인 중심의 고리로 그려 영향 범위를 보여 줌 |
 | **Topology** | `/topology` | RUM 애플리케이션 → 서비스 → Kubernetes 워크로드 / 프로세스 그룹 → 인프라의 트래픽 맵 |
 | **Starfield** | `/starfield` | 요청 하나하나를 별로 찍은 응답시간 산점도. 영역을 드래그해 트레이스를 엶 |
-| **Automation** | `/automation` | 운영에 바로 쓸 workflow를 이 환경에 만듦. 지금은 인프라 최적화 리포트 하나 |
+| **Automation** | `/automation` | 운영에 바로 쓸 workflow를 이 환경에 만듦. 인프라 최적화 리포트, 문제 → GitHub 이슈 |
 
 쿼리를 고치기 전에 [docs/dynatrace-query-notes.md](docs/dynatrace-query-notes.md)를 먼저 읽어 주세요.
 에러 없이 틀린 숫자를 내는 플랫폼 동작과, 각 설계 결정의 근거(실측 수치 포함)가 정리되어 있습니다.
@@ -192,8 +192,10 @@ Davis 문제를 하나 고르면 근본 원인을 가운데 두고, 그것에 �
 
 ![Automation 화면: Infrastructure Optimization 카드. 이 환경에 만들어진 workflow의 상태(Draft, Private, 템플릿 v22), 저장된 설정, 마지막 실행 결과와 최근 리포트 링크](docs/images/automation.png)
 
-운영에 바로 쓸 수 있는 Dynatrace workflow를 이 환경에 만드는 페이지입니다. 지금은 **[Ops Navigator] Infrastructure
-Optimization** 카드 하나가 있습니다. Kubernetes, 호스트, 디스크, 네트워크 사용률을 조회해 비용을 줄이고 위험을
+운영에 바로 쓸 수 있는 Dynatrace workflow를 이 환경에 만드는 페이지입니다. 카드는 두 개입니다.
+**[Ops Navigator] Infrastructure Optimization**과 [Problem → GitHub Issue](#problem--github-issue)입니다.
+
+**Infrastructure Optimization**은 Kubernetes, 호스트, 디스크, 네트워크 사용률을 조회해 비용을 줄이고 위험을
 낮추는 최적화 리포트를 만들고, Dynatrace 생성형 AI가 핵심 조치를 요약합니다. Dynatrace의 Infrastructure
 Optimization Agent 템플릿을 바탕으로 쿼리와 리포트를 고친 것입니다.
 
@@ -293,6 +295,33 @@ Optimization Agent 템플릿을 바탕으로 쿼리와 리포트를 고친 것�
   과거 숫자 오류 사례를 확인합니다.
 - 템플릿 버전은 [ui/app/infraOptimizationWorkflow.ts](ui/app/infraOptimizationWorkflow.ts)의
   `INFRA_TEMPLATE_VERSION`입니다. 버전마다 바뀐 내용이 그 위 주석에 있습니다. 작업 규칙은 [AGENTS.md](AGENTS.md)를 보세요.
+
+### Problem → GitHub Issue
+
+Davis가 오류(Error) 문제를 열면 SRE agent의 분석과 그 문제의 에러 로그(스택 트레이스)를 담은 GitHub 이슈를
+만들고, 문제에 이슈 링크를 annotation으로 남깁니다. 이슈를 받은 코딩 에이전트(GitHub Action의 Claude, Copilot 등)가
+원인을 찾아 PR을 열 수 있습니다. [dtctl-ai-bug-demo](https://github.com/Dynatrace/dtctl-ai-bug-demo)의 흐름을
+Analyze Problem 분석 위에 얹은 것입니다.
+
+```text
+resolve_problem → build_prompt → check_existing   이 문제로 만든 이슈가 있으면 여기서 멈춤
+  → call_agent       SRE agent 분석
+  → compose_issue    제목 "[P-xxx] 문제 제목", 본문 = Problem/EventID 줄 + 분석 + 에러 로그 최대 3건
+  → create_issue     GitHub connector
+  → annotate_problem 문제에 "📝 GitHub issue: <URL>"
+```
+
+- **만드는 법:** Owner, Repository, 라벨(쉼표로 구분, 기본 `dynatrace-problem`), 분석 언어를 넣고 **워크플로 만들기**를
+  누릅니다. Workflows 앱에서 `create_issue` 태스크의 **GitHub connection**을 고른 뒤 저장합니다.
+- **준비:** Settings → Connections → GitHub에 Issues 읽기·쓰기 권한이 있는 토큰으로 connection을 만들고,
+  Settings → General → External requests에 `api.github.com`을 허용합니다. Fork한 레포는 GitHub에서 Issues를 켜야 합니다.
+- **대상 좁히기:** 트리거는 이 환경의 모든 오류 문제입니다. 저장 전에 트리거의 **Entity tags**로 이 레포의 서비스만
+  고르세요.
+- 본문 맨 위의 `Problem: P-…`와 `EventID: …` 줄은 dtctl-ai-bug-demo의 에이전트가 읽는 형식입니다.
+- 이슈에는 애플리케이션 로그가 그대로 들어갑니다. 비공개 레포를 쓰고, 코딩 에이전트에는 로그를 지시가 아닌 데이터로
+  다루게 하세요.
+- 에러 로그 쿼리는 앱의 `build-analysis-prompt` 액션이 만듭니다. 앱이 1.0.22보다 오래되었으면 이슈에 그렇다고 적힙니다.
+- 코드는 [ui/app/githubIssueWorkflow.ts](ui/app/githubIssueWorkflow.ts)에 있습니다.
 
 ## 시작하기
 

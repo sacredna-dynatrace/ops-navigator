@@ -173,6 +173,7 @@ infra-queries/*.dql                 # The infra template's queries, one file eac
 scripts/infra-check.mjs             # npm run test:infra - checks the infra template on saved and live query results
 infra-tests/                        # Synthetic sets and number-check cases (committed); fixtures/ holds tenant results (ignored)
 ui/app/automationWorkflows.ts       # Automation page: create intent, finding workflows this app made
+ui/app/githubIssueWorkflow.ts       # Problem → GitHub Issue template: SRE agent report + error logs filed as an issue, one per problem
 ```
 
 ## ESLint Enforcement

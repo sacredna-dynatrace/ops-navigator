@@ -230,6 +230,45 @@ const logScope = (scope: LogScope): string | null => {
   return null;
 };
 
+/** A DQL string literal; names are free text (a workload name with a quote must not end the string). */
+const dqlString = (value: string) => `"${value.replace(/\\/g, "\\\\").replace(/"/g, "\\\"")}"`;
+const dqlList = (values: string[]) => `array(${[...new Set(values)].filter(Boolean).slice(0, 20).map(dqlString).join(", ")})`;
+
+/** The log levels and words that make a log line an error - the same rule the prompt gives Assist. */
+const ERROR_LEVELS = `array("ERROR", "SEVERE", "CRITICAL", "ALERT", "EMERGENCY")`;
+/** How far before the problem's start the error logs of a GitHub issue reach. */
+export const ERROR_LOG_LEAD_MINUTES = 10;
+
+/**
+ * The problem's error logs for a GitHub issue: the same one scope as the prompt (Kubernetes, else
+ * process group, else host), 10 minutes before the start to the end. Lines at an error level and lines
+ * with a stack trace come first, newest first within each; the workflow script drops repeats. No
+ * grouping in DQL: on diw85600 the easytravel logs are JSON that opens with its own timestamp, so
+ * every line was a group of one. Null when the problem has no scope or no start.
+ */
+export const errorLogsQuery = (problem: AnalysisProblem, scope: LogScope): string | null => {
+  const start = Date.parse(problem.start);
+  if (!Number.isFinite(start)) return null;
+  const end = Date.parse(problem.end);
+  const where = scope.namespaces.length > 0
+    ? [`in(k8s.namespace.name, ${dqlList(scope.namespaces)})`, scope.workloads.length > 0 ? `in(k8s.workload.name, ${dqlList(scope.workloads)})` : ""].filter(Boolean).join(" and ")
+    : scope.processGroups.length > 0 ? `in(dt.entity.process_group, ${dqlList(scope.processGroups)})`
+    : scope.hosts.length > 0 ? `in(dt.entity.host, ${dqlList(scope.hosts)})`
+    : null;
+  if (!where) return null;
+  const from = new Date(start - ERROR_LOG_LEAD_MINUTES * 60_000).toISOString();
+  const to = !problem.active && Number.isFinite(end) ? `, to: "${new Date(end + 60_000).toISOString()}"` : "";
+  return [
+    `fetch logs, from: "${from}"${to}`,
+    `| filter ${where}`,
+    `| filter in(loglevel, ${ERROR_LEVELS}) or matchesPhrase(content, "exception") or matchesPhrase(content, "error") or matchesPhrase(content, "failed") or matchesPhrase(content, "timeout")`,
+    `| fieldsAdd rank = if(in(loglevel, ${ERROR_LEVELS}), 2, else: 0) + if(contains(content, "Exception") or contains(content, "\\tat "), 1, else: 0)`,
+    "| sort rank desc, timestamp desc",
+    "| limit 50",
+    "| fields timestamp, loglevel, workload = k8s.workload.name, process_group = dt.entity.process_group, content = substring(content, from: 0, to: 4000)",
+  ].join("\n");
+};
+
 /**
  * The question sent to Assist, kept short and rule-shaped.
  *
