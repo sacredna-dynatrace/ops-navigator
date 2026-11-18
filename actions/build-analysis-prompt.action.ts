@@ -47,6 +47,35 @@ const validZone = (zone: string): string | null => {
   }
 };
 
+/**
+ * Why problemFactsQuery found nothing. It skips Davis duplicates, and a duplicate is easy to pick by hand
+ * (P-2611889 was a duplicate of P-2611886 and the run said "not found"), so name the problem it merged
+ * into: the non-duplicate one that started within the hour around it and shares an affected entity.
+ */
+const notFoundReason = async (problemId: string): Promise<string> => {
+  const [duplicate] = await runQuery(`fetch dt.davis.problems, from: now() - 7d
+| filter display_id == "${problemId}" and dt.davis.is_duplicate == true
+| sort timestamp desc
+| limit 1
+| fields event.start, affected_entity_ids`);
+  if (!duplicate) return `Problem ${problemId} was not found in dt.davis.problems over the last 7 days.`;
+  const ids = strings(duplicate, "affected_entity_ids").filter((id) => /^[A-Z_]+-[0-9A-F]+$/.test(id));
+  const start = text(duplicate, "event.start");
+  const originals = ids.length > 0 && start
+    ? await runQuery(`fetch dt.davis.problems, from: now() - 8d
+| filter dt.davis.is_duplicate == false and display_id != "${problemId}"
+| filter abs(event.start - toTimestamp("${start}")) <= 1h
+| expand affected_entity_ids
+| filter in(affected_entity_ids, array(${ids.map((id) => `"${id}"`).join(", ")}))
+| summarize n = count(), by: { display_id }
+| sort display_id
+| limit 5`).catch(() => [])
+    : [];
+  const names = originals.map((row) => text(row, "display_id")).filter(Boolean);
+  return `Problem ${problemId} is a Davis duplicate - Davis merged it into another problem, and duplicates are not analyzed. `
+    + (names.length > 0 ? `Run with ${names.join(" or ")} instead.` : "Run with the problem it was merged into.");
+};
+
 export default async (payload: ActionInput) => {
   const problemId = (payload.problemId ?? "").trim();
   if (!DISPLAY_ID.test(problemId)) throw new Error(`Input 'problemId' must be a Davis display id like P-2611156, got '${problemId}'.`);
@@ -58,7 +87,7 @@ export default async (payload: ActionInput) => {
 
   const [record] = await runQuery(problemFactsQuery(problemId));
   const problem = record ? problemFromRecord(record) : null;
-  if (!problem) throw new Error(`Problem ${problemId} was not found in dt.davis.problems over the last 7 days.`);
+  if (!problem) throw new Error(await notFoundReason(problemId));
 
   // The hosts the problem's services run on: the only log scope a problem tied purely to services has.
   const hostsQuery = serviceHostsQuery(scopeServiceIds(problem));
