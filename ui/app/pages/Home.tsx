@@ -162,7 +162,9 @@ export const Home = () => {
    * has to name it. The map draws fewer still, since it only shows what its anchors reach.
    */
   const connectedPods = useMemo(() => {
-    const linked = new Set(edges.flatMap((edge) => [edge.source, edge.target]));
+    // Service-to-pod edges only: counting any edge took in the pod-to-host "runs on" edges, which
+    // nearly every pod has, and showed 464 of 467 pods on a tenant where services ran in 104.
+    const linked = new Set(edges.filter((edge) => edge.source.startsWith("service-")).map((edge) => edge.target));
     return nodes.filter((node) => node.kind === "paas" && linked.has(node.id)).length;
   }, [edges, nodes]);
   // A single RUM application in scope means the tile's link has an unambiguous target.
