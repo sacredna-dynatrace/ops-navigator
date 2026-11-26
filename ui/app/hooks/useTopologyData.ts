@@ -872,6 +872,31 @@ export const useTopologyData = (timeframe: Timeframe, refreshedAt: number, sortB
       containers: values.reduce((sum, pod) => sum + pod.containers, 0),
     };
   }, [podInventory.data]);
+  /**
+   * Process groups that run services outside any pod - what the workloads tile adds to the pods.
+   * A process inside a pod is that pod, and a service that also runs on a pod is already counted
+   * there (OneAgent in a container reports the process and the pod both), so only the rest count.
+   * Mirrors the map, which draws a process group only for services it could not place on a pod.
+   * koreanair (bby34718) runs no pods: 41 groups, 64 processes. hanjin (isb54165) runs both: 464 pods + 50 groups.
+   */
+  const processes = useMemo(() => {
+    const placements = records(serviceProcess.data);
+    const onPod = new Set([
+      ...placements.filter((record) => text(record, "pod")).map((record) => text(record, "service_id")),
+      ...records(pods.data).map((record) => text(record, "service_id")),
+    ]);
+    const groups = new Map<string, { classic: Set<string> }>();
+    const processIds = new Set<string>();
+    for (const record of placements) {
+      const pgId = text(record, "pg_id");
+      if (!pgId || text(record, "pod") || onPod.has(text(record, "service_id"))) continue;
+      const group = groups.get(pgId) ?? { classic: new Set<string>() };
+      group.classic.add(text(record, "process_classic"));
+      groups.set(pgId, group);
+      processIds.add(text(record, "process_id"));
+    }
+    return { groups, processes: processIds.size };
+  }, [pods.data, serviceProcess.data]);
   const problemsByEntity = useMemo(() => new Map<string, number>(records(affectedEntities.data).flatMap((record) => {
     const id = text(record, "entity_id");
     return id ? [[id, numeric(record, "alerts")] as const] : [];
@@ -1092,6 +1117,7 @@ export const useTopologyData = (timeframe: Timeframe, refreshedAt: number, sortB
      */
     problemsByEntity,
     kubernetes,
+    processes,
     /**
      * Pod utilization keyed by node id. Requests and limits stay null when the pod declares none,
      * so the panel can say "not set" rather than implying a configured zero. The running-container

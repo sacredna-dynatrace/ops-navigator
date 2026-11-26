@@ -109,7 +109,7 @@ export const Home = () => {
     const timer = setTimeout(() => setCopyState("idle"), 2000);
     return () => clearTimeout(timer);
   }, [copyState]);
-  const { nodes, edges, map, isLoading, errors, refetch, queries, recordCounts, problems, kubernetes, serviceHealth, hostHealth, rumHealth, podHealth, problemsByEntity, truncated, orderInQuery, serviceTags, serviceTypes } = useTopologyData(timeframe, refreshedAt, sortBy);
+  const { nodes, edges, map, isLoading, errors, refetch, queries, recordCounts, problems, kubernetes, processes, serviceHealth, hostHealth, rumHealth, podHealth, problemsByEntity, truncated, orderInQuery, serviceTags, serviceTypes } = useTopologyData(timeframe, refreshedAt, sortBy);
   /** Every tag on a service, most used first. */
   const tagOptions = useMemo(() => {
     const counts = new Map<string, number>();
@@ -167,6 +167,26 @@ export const Home = () => {
     const linked = new Set(edges.filter((edge) => edge.source.startsWith("service-")).map((edge) => edge.target));
     return nodes.filter((node) => node.kind === "paas" && linked.has(node.id)).length;
   }, [edges, nodes]);
+  /**
+   * The workloads tile: pods plus the process groups that run services outside any pod. A tenant
+   * without Kubernetes (koreanair) showed "0 pods" while its services ran on 41 process groups; one
+   * with both (hanjin) has 464 pods and 50 such groups. The meta line names only the side that exists.
+   */
+  const workloadTile = useMemo(() => {
+    const groups = [...processes.groups];
+    const impactedGroups = groups.filter(([pgId, group]) => problemsByEntity.has(pgId) || [...group.classic].some((id) => problemsByEntity.has(id))).length;
+    const pods = counts.paas.total;
+    const plural = (count: number, noun: string) => `${count} ${noun}${count === 1 ? "" : noun.endsWith("s") ? "es" : "s"}`;
+    const podPart = pods > 0 ? [`${plural(pods, "pod")} (${connectedPods} with a service)`, plural(kubernetes.clusters, "cluster"), plural(kubernetes.containers, "container")] : [];
+    const processPart = groups.length > 0 ? [plural(groups.length, "process group"), plural(processes.processes, "process")] : [];
+    const parts = podPart.length + processPart.length > 0 ? [...podPart, ...processPart] : ["0 pods · 0 process groups"];
+    return {
+      value: withImpacted({ total: pods + groups.length, impacted: counts.paas.impacted + impactedGroups }),
+      meta: `${parts.join(" · ")} · View DQL`,
+      // Process groups only: their DQL and the hosts they run on are what the tile can open.
+      processOnly: pods === 0 && groups.length > 0,
+    };
+  }, [connectedPods, counts.paas, kubernetes, problemsByEntity, processes]);
   // A single RUM application in scope means the tile's link has an unambiguous target.
   const tileLinks = useMemo(() => {
     const rumNodes = nodes.filter((node) => node.kind === "rum");
@@ -214,7 +234,7 @@ export const Home = () => {
       {([
         { key: "rum" as const, label: "RUM applications", value: withImpacted(counts.rum), href: tileLinks.rum, meta: "Total / with open problems · View DQL", title: "Open Frontend observability" },
         { key: "service" as const, label: "Connected services", value: withImpacted(counts.service), href: tileLinks.service, meta: "Total / with open problems · View DQL", title: "Open Services explorer" },
-        { key: "pods" as const, label: "Kubernetes pods", value: withImpacted(counts.paas), href: tileLinks.paas, meta: `${connectedPods} connected to a service · ${kubernetes.clusters} cluster${kubernetes.clusters === 1 ? "" : "s"} · ${kubernetes.containers} container${kubernetes.containers === 1 ? "" : "s"} · View DQL`, title: "Open Kubernetes" },
+        { key: workloadTile.processOnly ? "serviceProcess" as const : "pods" as const, label: "Workloads / processes", value: workloadTile.value, href: workloadTile.processOnly ? tileLinks.infrastructure : tileLinks.paas, meta: workloadTile.meta, title: workloadTile.processOnly ? "Open Hosts explorer" : "Open Kubernetes" },
         { key: "infrastructure" as const, label: "Infrastructure targets", value: withImpacted(counts.infrastructure), href: tileLinks.infrastructure, meta: "Total / with open problems · View DQL", title: "Open Hosts explorer" },
         { key: "problems" as const, label: "Problems", value: <>{problems.total}/<span className="metric-critical">{problems.active}</span></>, href: tileLinks.problems, meta: "Total / active · View DQL", title: "Open Problems" },
       ]).map((tile) => <div className="metric-tile" key={tile.key}>
