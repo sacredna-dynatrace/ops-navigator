@@ -327,7 +327,21 @@ export const createWorkflowLink = (kind: WorkflowKind, existingId?: string) =>
     "create-workflow",
   );
 
-export type WorkflowInfo = { id: string; title: string; active: boolean; version: number; outdated: boolean; actor: string | null };
+/**
+ * `deployed` false is a Draft: saved from the create intent but never deployed, so its trigger does not
+ * fire even with `active` on. On bby34718 the on-demand workflow sat as a Draft with the trigger on; the
+ * page's requests reached Grail and nothing ran. Unknown (older API) counts as deployed.
+ */
+export type WorkflowInfo = { id: string; title: string; active: boolean; deployed: boolean; version: number; outdated: boolean; actor: string | null };
+
+/** Why a workflow would not run when asked: missing, a Draft, or its trigger switched off. Null when it would. */
+export type WorkflowBlock = { reason: "missing" } | { reason: "draft" | "off"; id: string } | null;
+
+export const blockOf = (info: WorkflowInfo | undefined): WorkflowBlock =>
+  !info ? { reason: "missing" } : !info.deployed ? { reason: "draft", id: info.id } : !info.active ? { reason: "off", id: info.id } : null;
+
+/** The sheet's one-word state of a workflow. */
+export const stateLabel = (info: WorkflowInfo) => !info.deployed ? "Draft (배포 안 됨)" : info.active ? "켜짐" : "꺼짐";
 
 const kindOf = (workflow: WorkflowList): WorkflowKind | null => {
   const config = workflow.trigger?.eventTrigger?.triggerConfiguration as { type?: string; value?: { query?: string } } | undefined;
@@ -358,9 +372,11 @@ export const findWorkflows = async (): Promise<FoundWorkflows> => {
     const script = (full.tasks?.resolve_problem?.input as { script?: string } | undefined)?.script ?? "";
     const match = MARKER_PATTERN.exec(script);
     const version = match ? Number(match[1]) : 1;
-    all.push({ kind, id: full.id, title: full.title, active: full.trigger?.eventTrigger?.isActive === true, version, outdated: version < TEMPLATE_VERSION, actor: full.actor ?? full.owner ?? null });
+    all.push({ kind, id: full.id, title: full.title, active: full.trigger?.eventTrigger?.isActive === true, deployed: full.isDeployed !== false, version, outdated: version < TEMPLATE_VERSION, actor: full.actor ?? full.owner ?? null });
   }
-  const better = (a: WorkflowInfo, b: WorkflowInfo) => (a.active !== b.active ? a.active : a.version > b.version);
+  // The one that would run wins: deployed with its trigger on, then the newer template.
+  const runs = (info: WorkflowInfo) => info.active && info.deployed;
+  const better = (a: WorkflowInfo, b: WorkflowInfo) => (runs(a) !== runs(b) ? runs(a) : a.deployed !== b.deployed ? a.deployed : a.version > b.version);
   const found: FoundWorkflows = { others: [] };
   for (const info of all) {
     const current = found[info.kind];

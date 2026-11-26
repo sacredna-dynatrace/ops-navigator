@@ -20,7 +20,7 @@ import { ANSWER_LANGUAGES, ASSIST_INTENT, DEFAULT_ANSWER_LANGUAGE, answerLanguag
 import { logScopeOf } from "../problemAnalysis";
 import { AutoAnalysisSheet } from "../components/AutoAnalysisSheet";
 import { useAnalyzeWorkflows, useProblemAgentAnalysis, type ProblemAnalysis } from "../hooks/useAnalyzeWorkflow";
-import { WORKFLOW_PERMISSIONS, isPartialReport } from "../analyzeWorkflow";
+import { WORKFLOW_PERMISSIONS, blockOf, isPartialReport, workflowLink, type WorkflowBlock } from "../analyzeWorkflow";
 import type { ServiceInfo } from "../hooks/useBlastRadiusData";
 
 /** Today, as on the topology page; a week of problems is one preset away. */
@@ -175,13 +175,16 @@ const AnalyzeButton = ({ problem, language, services, agentReport, variant }: { 
 
 /**
  * Asks the on-demand Analyze Problem workflow to analyze the selected problem: the same prompt as
- * Analyze problem, answered by the built-in SRE agent and kept as a problem annotation. Disabled only
- * when the workflow is known to be missing, and while a run is pending - every run costs AI units.
+ * Analyze problem, answered by the built-in SRE agent and kept as a problem annotation. Disabled when
+ * the workflow is known not to run - missing, a Draft, or switched off - and while a run is pending:
+ * every run costs AI units, and a request nothing answers only leaves "분석 중…" hanging.
  */
-const AgentButton = ({ missing, analysis, onRun }: { missing: boolean; analysis: ProblemAnalysis; onRun: () => void }) => {
+const BLOCK_TITLE = { missing: "자동 분석 설정에서 on demand workflow를 먼저 만드세요", draft: "on demand workflow가 Draft입니다. Workflows 앱에서 Deploy하세요", off: "on demand workflow의 트리거가 꺼져 있습니다" } as const;
+
+const AgentButton = ({ block, analysis, onRun }: { block: WorkflowBlock; analysis: ProblemAnalysis; onRun: () => void }) => {
   const pending = analysis.kind === "requested" || analysis.kind === "running" || analysis.kind === "loading";
   const label = pending && analysis.kind !== "loading" ? "SRE agent 분석 중…" : analysis.kind === "done" || analysis.kind === "failed" ? "SRE agent로 다시 분석" : "SRE agent로 분석";
-  return <Button size="condensed" variant="emphasized" disabled={missing || pending} onClick={onRun} title={missing ? "자동 분석 설정에서 on demand workflow를 먼저 만드세요" : undefined}>
+  return <Button size="condensed" variant="emphasized" disabled={block !== null || pending} onClick={onRun} title={block ? BLOCK_TITLE[block.reason] : undefined}>
     <Button.Prefix><AiIcon /></Button.Prefix>
     {label}
   </Button>;
@@ -202,15 +205,25 @@ const PermissionHint = ({ lead }: { lead: string }) => <div className="blast-age
 </div>;
 
 /** The SRE agent's answer for the selected problem, read from its annotation, or where its run stands. */
-const AgentAnalysis = ({ analysis, missing }: { analysis: ProblemAnalysis; missing: boolean }) => {
+/** Why the button is off, with the way out: create the workflow, or open it to deploy or switch it on. */
+const BlockNotice = ({ block }: { block: Exclude<WorkflowBlock, null> }) => block.reason === "missing"
+  ? <p>on demand workflow가 없습니다. 상단의 <b>자동 분석 설정</b>에서 만들 수 있습니다.</p>
+  : <div className="blast-agent-hint"><p>
+    {block.reason === "draft"
+      ? <>on demand workflow가 <b>Draft</b>(배포 안 됨)라서 분석 요청을 보내도 실행되지 않습니다. Workflows 앱에서 열어 <b>Deploy</b>하세요.</>
+      : <>on demand workflow의 트리거가 꺼져 있어 분석 요청을 보내도 실행되지 않습니다. Workflows 앱에서 트리거를 켜세요.</>}
+    {" "}<a href={workflowLink(block.id)} target="_blank" rel="noopener noreferrer">Workflows 앱에서 열기</a>
+  </p></div>;
+
+const AgentAnalysis = ({ analysis, block }: { analysis: ProblemAnalysis; block: WorkflowBlock }) => {
   switch (analysis.kind) {
     case "loading": return <p>최근 분석을 찾는 중…</p>;
-    case "none": return missing
-      ? <p>on demand workflow가 없습니다. 상단의 <b>자동 분석 설정</b>에서 만들 수 있습니다.</p>
+    case "none": return block
+      ? <BlockNotice block={block} />
       : <p>이 문제에 대한 SRE agent 분석이 아직 없습니다.</p>;
     case "requested": return <p>분석을 요청했습니다. workflow가 시작되기를 기다리는 중… ({elapsed(analysis.since)})</p>;
     case "running": return <p>SRE agent가 분석 중입니다 ({elapsed(analysis.since)} 경과, 보통 2~3분). 결과는 문제 주석으로도 남습니다.</p>;
-    case "timeout": return <p>응답이 없습니다. on demand workflow가 없거나 꺼져 있을 수 있습니다 (<b>자동 분석 설정</b>에서 확인). 막 만든 workflow라면 1분 뒤 다시 시도하세요.</p>;
+    case "timeout": return <p>응답이 없습니다. on demand workflow가 없거나, 꺼져 있거나, Draft(배포 안 됨)일 수 있습니다 (<b>자동 분석 설정</b>에서 확인). 막 만든 workflow라면 1분 뒤 다시 시도하세요.</p>;
     case "error": return <p>분석을 요청하거나 읽지 못했습니다: {analysis.message}</p>;
     case "failed": return <>
       <p>분석을 완료하지 못했습니다 ({new Date(analysis.at).toLocaleString()}).</p>
@@ -289,8 +302,8 @@ export const BlastRadius = () => {
   const analyzeWorkflows = useAnalyzeWorkflows();
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [agentExpanded, setAgentExpanded] = useState(false);
-  // Missing only when the workflows were read and there is no on-demand one; unknown counts as present.
-  const onDemandMissing = analyzeWorkflows.status.kind === "ready" && !analyzeWorkflows.status.workflows.onDemand;
+  // Blocked only when the workflows were read and the on-demand one would not run; unknown counts as fine.
+  const onDemandBlock = analyzeWorkflows.status.kind === "ready" ? blockOf(analyzeWorkflows.status.workflows.onDemand) : null;
   const agent = useProblemAgentAnalysis(selected?.eventId || null, selected?.displayId ?? null);
 
   /** The entity's own app, for the types with a verified link; null for everything else. */
@@ -354,7 +367,7 @@ export const BlastRadius = () => {
       </div>
     </section>
     <Sheet title="SRE agent 분석" show={agentExpanded} onDismiss={() => setAgentExpanded(false)} actions={<Button onClick={() => setAgentExpanded(false)}>닫기</Button>}>
-      <div className="blast-agent-scroll"><div className="blast-agent-expanded"><AgentAnalysis analysis={agent.state} missing={onDemandMissing} /></div></div>
+      <div className="blast-agent-scroll"><div className="blast-agent-expanded"><AgentAnalysis analysis={agent.state} block={onDemandBlock} /></div></div>
     </Sheet>
     <AutoAnalysisSheet show={settingsOpen} onClose={() => setSettingsOpen(false)} status={analyzeWorkflows.status} onReload={() => void analyzeWorkflows.reload()} />
     {errors.length > 0 && <div className="query-message query-error" role="alert"><div className="query-error-list"><strong>{errors.length} of the page’s queries failed.</strong>{errors.map((item) => <span key={item.label}><b>{item.label}:</b> {item.message}</span>)}</div></div>}
@@ -406,7 +419,7 @@ export const BlastRadius = () => {
             <div className="panel-links blast-actions">
               {problemLink && <a href={problemLink} target="_blank" rel="noopener noreferrer">Open {selected.displayId} in Problems <ExternalLinkIcon /></a>}
               <AnalyzeButton problem={selected} language={language} services={services} agentReport={agent.state.kind === "done" ? agent.state.text : null} />
-              <AgentButton missing={onDemandMissing} analysis={agent.state} onRun={() => void agent.run()} />
+              <AgentButton block={onDemandBlock} analysis={agent.state} onRun={() => void agent.run()} />
               <Select name="answer-language" aria-label="Answer language for Assist" value={language} onChange={(value) => { if (value) chooseLanguage(value); }}>
                 <Select.Trigger />
                 <Select.Content>
@@ -454,8 +467,8 @@ export const BlastRadius = () => {
           <span>Confirmed affected</span>
           <div className="workload-pods">{selected.affected.map((entity) => <div className="workload-pod" key={entity.id}><StatusIcon problem />{entityName(entity.id, entity.name)}<b>{ENTITY_KO[entityType(entity.id)] ?? entityType(entity.id).toLowerCase()}</b></div>)}</div>
           <hr />
-          <div className="blast-analysis-heading"><span>SRE agent 분석</span><span className="blast-heading-actions">{agent.state.kind === "done" && <Button size="condensed" onClick={() => setAgentExpanded(true)}>크게 보기</Button>}<AgentButton missing={onDemandMissing} analysis={agent.state} onRun={() => void agent.run()} /></span></div>
-          <div className="blast-description"><AgentAnalysis analysis={agent.state} missing={onDemandMissing} /></div>
+          <div className="blast-analysis-heading"><span>SRE agent 분석</span><span className="blast-heading-actions">{agent.state.kind === "done" && <Button size="condensed" onClick={() => setAgentExpanded(true)}>크게 보기</Button>}<AgentButton block={onDemandBlock} analysis={agent.state} onRun={() => void agent.run()} /></span></div>
+          <div className="blast-description"><AgentAnalysis analysis={agent.state} block={onDemandBlock} /></div>
           <hr />
           <div className="blast-analysis-heading"><span>Davis 분석</span><AnalyzeButton variant="emphasized" problem={selected} language={language} services={services} agentReport={agent.state.kind === "done" ? agent.state.text : null} /></div>
           <div className="blast-description">

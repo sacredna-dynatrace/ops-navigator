@@ -230,6 +230,7 @@
 .auto-analysis-link { display: inline-flex; align-items: center; gap: 4px; color: #0369a1; font-size: 12px; text-decoration: none; }
 .auto-analysis-link svg { width: 12px; height: 12px; }
 .auto-analysis-note { color: var(--dashboard-muted); font-size: 12px; }
+.auto-analysis-warning { color: #92400e; font-size: 12px; }
 .blast-controls { display: flex; flex-direction: column; gap: 8px; padding: 0 20px 10px; }
 .blast-controls-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
 /* Map search: results drop below the input and float over the map. */

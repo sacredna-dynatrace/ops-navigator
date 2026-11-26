@@ -3,14 +3,14 @@ import { Button } from "@dynatrace/strato-components/buttons";
 import { Sheet } from "@dynatrace/strato-components/overlays";
 import { Paragraph } from "@dynatrace/strato-components/typography";
 import { ExternalLinkIcon } from "@dynatrace/strato-icons";
-import { TEMPLATE_VERSION, WORKFLOW_PERMISSIONS, WORKFLOW_TITLES, createWorkflowLink, workflowLink, type WorkflowInfo, type WorkflowKind } from "../analyzeWorkflow";
+import { TEMPLATE_VERSION, WORKFLOW_PERMISSIONS, WORKFLOW_TITLES, createWorkflowLink, stateLabel, workflowLink, type WorkflowInfo, type WorkflowKind } from "../analyzeWorkflow";
 import type { WorkflowStatus } from "../hooks/useAnalyzeWorkflow";
 
 type Props = { show: boolean; onClose: () => void; status: WorkflowStatus; onReload: () => void };
 
 const PURPOSE: Record<WorkflowKind, string> = {
   auto: "열린 지 10분 지난 ERROR/SLOWDOWN 문제를 자동으로 분석합니다. 생성 시 꺼져 있습니다.",
-  onDemand: "이 페이지의 SRE agent로 분석 버튼이 실행합니다. 생성 시 켜져 있습니다.",
+  onDemand: "이 페이지의 SRE agent로 분석 버튼이 실행합니다. 트리거는 켜진 채로 만들어지지만, 저장한 뒤 Deploy해야 동작합니다.",
 };
 
 /** One workflow: what it does, whether it exists, and how to create or open it. */
@@ -19,14 +19,17 @@ const Row = ({ kind, info, known }: { kind: WorkflowKind; info: WorkflowInfo | u
     <strong>{WORKFLOW_TITLES[kind]}</strong>
     <span className="auto-analysis-note">{PURPOSE[kind]}</span>
     {known && <span>
-      {!info ? "없음" : `${info.active ? "켜짐" : "꺼짐"} · 템플릿 v${info.version}${info.outdated ? ` (v${TEMPLATE_VERSION} 있음)` : ""}${info.actor ? ` · 실행 주체 ${info.actor}` : ""}`}
+      {!info ? "없음" : `${stateLabel(info)} · 템플릿 v${info.version}${info.outdated ? ` (v${TEMPLATE_VERSION} 있음)` : ""}${info.actor ? ` · 실행 주체 ${info.actor}` : ""}`}
+    </span>}
+    {known && info && !info.deployed && <span className="auto-analysis-warning">
+      Draft라서 트리거가 동작하지 않습니다{kind === "onDemand" ? " (분석 버튼을 눌러도 실행되지 않음)" : ""}. Workflows 앱에서 열어 <b>Deploy</b>하세요.
     </span>}
     <div className="auto-analysis-actions">
       {(!info || info.outdated) && <Button as="a" href={createWorkflowLink(kind, info?.id)} target="_blank" rel="noopener noreferrer" variant={info ? "default" : "emphasized"} color="primary">
         {info ? `v${TEMPLATE_VERSION}로 업데이트` : "만들기"}
         <Button.Suffix><ExternalLinkIcon /></Button.Suffix>
       </Button>}
-      {info && <a href={workflowLink(info.id)} target="_blank" rel="noopener noreferrer">Workflows 앱에서 열기 (켜기·끄기) <ExternalLinkIcon /></a>}
+      {info && <a href={workflowLink(info.id)} target="_blank" rel="noopener noreferrer">Workflows 앱에서 열기 ({info.deployed ? "켜기·끄기" : "Deploy"}) <ExternalLinkIcon /></a>}
     </div>
   </div>
 );
@@ -62,7 +65,7 @@ export const AutoAnalysisSheet = ({ show, onClose, status, onReload }: Props) =>
           <strong>이전 버전 / 사본 {workflows.others.length}개</strong>
           <span className="auto-analysis-note">앱은 workflow를 지울 권한이 없습니다. 열어서 삭제하세요 (켜져 있으면 문제마다 분석이 중복 실행됩니다).</span>
           {workflows.others.map((other) => <a key={other.id} className="auto-analysis-link" href={workflowLink(other.id)} target="_blank" rel="noopener noreferrer">
-            {other.title} · v{other.version} · {other.active ? "켜짐" : "꺼짐"} <ExternalLinkIcon />
+            {other.title} · v{other.version} · {stateLabel(other)} <ExternalLinkIcon />
           </a>)}
         </div>}
         <Paragraph className="auto-analysis-note">
